@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS property_assignments;
+DROP TABLE IF EXISTS property_agents;
+DROP TABLE IF EXISTS parking_spots;
+DROP TABLE IF EXISTS unit_amenities;
+DROP TABLE IF EXISTS property_amenities;
+DROP TABLE IF EXISTS units;
+DROP TABLE IF EXISTS properties;
+DROP TABLE IF EXISTS amenities;
+DROP TABLE IF EXISTS unit_types;
+DROP TABLE IF EXISTS property_types;

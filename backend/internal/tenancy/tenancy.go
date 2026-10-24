@@ -122,7 +122,12 @@ func (m *Middleware) Resolve(next http.Handler) http.Handler {
 func (m *Middleware) requestHost(r *http.Request) string {
 	if m.trustProxy {
 		if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
-			return strings.TrimSpace(strings.Split(fwd, ",")[0])
+			parts := strings.Split(fwd, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				if host := strings.TrimSpace(parts[i]); host != "" {
+					return host
+				}
+			}
 		}
 	}
 	return r.Host

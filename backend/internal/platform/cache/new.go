@@ -18,7 +18,7 @@ import (
 func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (Store, error) {
 	if cfg.RedisAddr == "" {
 		if !cfg.IsDevelopment() {
-			log.Warn("REDIS_ADDR is empty; using in-process cache (single instance only)")
+			return nil, fmt.Errorf("REDIS_ADDR is required outside development: lockouts and token revocation must be shared across instances")
 		}
 		return newMemoryStore(), nil
 	}

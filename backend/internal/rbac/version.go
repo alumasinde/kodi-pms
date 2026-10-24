@@ -27,6 +27,26 @@ func BumpAuthzVersion(ctx context.Context, store cache.Store, orgID uint64) erro
 	return err
 }
 
-func authzCacheKey(userID, orgID uint64, version int64) string {
-	return fmt.Sprintf("authz:%d:%d:%d", userID, orgID, version)
+// UserAuthzVersion is separate from the organization version so a password
+// reset only invalidates that user's cached principal, not every user in the
+// organization.
+func UserAuthzVersion(ctx context.Context, store cache.Store, userID uint64) int64 {
+	raw, err := store.Get(ctx, fmt.Sprintf("authzver:user:%d", userID))
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func BumpUserAuthzVersion(ctx context.Context, store cache.Store, userID uint64) error {
+	_, err := store.Incr(ctx, fmt.Sprintf("authzver:user:%d", userID))
+	return err
+}
+
+func authzCacheKey(userID, orgID uint64, orgVersion, userVersion int64) string {
+	return fmt.Sprintf("authz:%d:%d:%d:%d", userID, orgID, orgVersion, userVersion)
 }

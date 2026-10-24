@@ -15,7 +15,7 @@ type repository struct {
 func (r *repository) UserState(ctx context.Context, userID uint64) (*userState, error) {
 	var u userState
 	err := r.db.GetContext(ctx, &u, `
-		SELECT id, organization_id, status, must_change_password
+		SELECT id, organization_id, status, must_change_password, token_version
 		FROM users WHERE id = ? AND deleted_at IS NULL`, userID)
 	if err != nil {
 		return nil, err

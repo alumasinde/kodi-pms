@@ -15,6 +15,9 @@ type Store interface {
 	Set(ctx context.Context, key, value string, ttl time.Duration) error
 	Del(ctx context.Context, keys ...string) error
 	Incr(ctx context.Context, key string) (int64, error)
+	// IncrTTL increments and sets the expiry only when the key is created, in
+	// one atomic operation. Fixed-window limiters must not split these steps.
+	IncrTTL(ctx context.Context, key string, ttl time.Duration) (int64, error)
 	Expire(ctx context.Context, key string, ttl time.Duration) error
 	Close() error
 }

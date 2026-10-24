@@ -17,10 +17,11 @@ func (i LoginInput) Who() string {
 }
 
 type PinLoginInput struct {
-	Identifier string `json:"identifier"`
-	Email      string `json:"email"`
-	Phone      string `json:"phone"`
-	Pin        string `json:"pin"`
+	Identifier   string `json:"identifier"`
+	Email        string `json:"email"`
+	Phone        string `json:"phone"`
+	Pin          string `json:"pin"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 func (i PinLoginInput) Who() string {
@@ -69,6 +70,20 @@ type ChangePasswordInput struct {
 type SetPINInput struct {
 	CurrentPassword string `json:"current_password"`
 	Pin             string `json:"pin"`
+}
+
+type InviteInput struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+	Phone     string `json:"phone"`
+	RoleID    uint64 `json:"role_id"`
+}
+
+type InviteDTO struct {
+	UserID    uint64    `json:"user_id"`
+	Email     string    `json:"email"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type LogoutInput struct {

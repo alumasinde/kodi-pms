@@ -82,11 +82,17 @@ func main() {
 		if !ok || v < 0 {
 			log.Fatal("usage: migrate goto <version>")
 		}
+		if os.Getenv("APP_ENV") == "production" {
+			requireConfirm(*yes, "APP_ENV=production")
+		}
 		report(m.Migrate(uint(v)))
 	case "force":
 		v, ok := intArg(args)
 		if !ok {
 			log.Fatal("usage: migrate force <version>")
+		}
+		if os.Getenv("APP_ENV") == "production" {
+			requireConfirm(*yes, "APP_ENV=production")
 		}
 		report(m.Force(v))
 	case "version":

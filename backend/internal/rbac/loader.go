@@ -20,18 +20,20 @@ type Loader struct {
 }
 
 func NewLoader(db *sqlx.DB, store cache.Store, log *slog.Logger) *Loader {
-	return &Loader{repo: &repository{db: db}, store: store, log: log, ttl: 10 * time.Minute}
+	return &Loader{repo: &repository{db: db}, store: store, log: log, ttl: 2 * time.Minute}
 }
 
 // Load builds the union of permissions and the derived data scope for a user
-// in one organization. Results are cached per authorization version so a role
-// change invalidates every user in the org at once.
+// in one organization. Results are cached per organization and per user
+// version, so role changes invalidate the whole org while credential changes
+// invalidate only that user.
 func (l *Loader) Load(ctx context.Context, userID, orgID uint64) (*Principal, error) {
 	if userID == 0 || orgID == 0 {
 		return nil, httpx.ErrUnauthorized
 	}
-	ver := AuthzVersion(ctx, l.store, orgID)
-	key := authzCacheKey(userID, orgID, ver)
+	orgVer := AuthzVersion(ctx, l.store, orgID)
+	userVer := UserAuthzVersion(ctx, l.store, userID)
+	key := authzCacheKey(userID, orgID, orgVer, userVer)
 	if raw, err := l.store.Get(ctx, key); err == nil {
 		var p Principal
 		if json.Unmarshal([]byte(raw), &p) == nil {
@@ -77,6 +79,7 @@ func (l *Loader) Load(ctx context.Context, userID, orgID uint64) (*Principal, er
 		Perms:              make(map[string]struct{}),
 		Scope:              Scope{OrgID: orgID},
 		MustChangePassword: u.MustChangePassword,
+		TokenVersion:       u.TokenVersion,
 	}
 	for _, r := range roles {
 		roleIDs = append(roleIDs, r.ID)

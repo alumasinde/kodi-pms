@@ -8,9 +8,9 @@ import (
 	"kodipms/internal/platform/httpx"
 )
 
-// Cost 12. Used when the identifier does not exist so the response time is
-// comparable to a real password check.
-const dummyHash = "$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO"
+// Cost 12, for a random value that is not a real password. Used when the
+// identifier does not exist so response time stays comparable to a real check.
+const dummyHash = "$2y$12$ev6l/E5lg5lulYP6tvZrnuo/QYfSQrbXPi9FR6LGIlHNAayK8PY32"
 
 var commonPasswords = map[string]struct{}{
 	"password": {}, "password1": {}, "password123": {}, "12345678": {},

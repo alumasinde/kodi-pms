@@ -53,7 +53,11 @@ func (h *Handler) pinLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, tenancy.ErrUnknownDomain)
 		return
 	}
-	session, err := h.svc.LoginWithPIN(r.Context(), org, in, h.meta(r))
+	device := strings.TrimSpace(in.RefreshToken)
+	if c, err := r.Cookie(refreshCookie); err == nil && strings.TrimSpace(c.Value) != "" {
+		device = strings.TrimSpace(c.Value)
+	}
+	session, err := h.svc.LoginWithPIN(r.Context(), org, in, device, h.meta(r))
 	if err != nil {
 		httpx.Fail(w, err)
 		return
@@ -157,6 +161,25 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	h.clearRefreshCookie(w)
 	httpx.NoContent(w)
+}
+
+func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
+	p := rbac.FromContext(r.Context())
+	if p == nil {
+		httpx.Fail(w, httpx.ErrUnauthorized)
+		return
+	}
+	var in InviteInput
+	if err := httpx.Decode(w, r, &in); err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	invite, err := h.svc.Invite(r.Context(), p, in, h.meta(r))
+	if err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	httpx.Created(w, invite)
 }
 
 func (h *Handler) setPIN(w http.ResponseWriter, r *http.Request) {

@@ -1,11 +1,17 @@
 -- Kodi PMS demo dataset.
 --
--- Apply only to a dedicated demo database, after migrations 000001-000011:
---   mysql -u <user> -p <database> < db/demo/demo_seed.sql
+-- Apply only to a dedicated, disposable demo database, after the migrations:
+--   (echo "SET @demo_seed_confirmed = 'yes';"; cat db/demo/demo_seed.sql) \
+--     | mysql -u <user> -p <database>
+--
+-- The guard below refuses to run unless @demo_seed_confirmed is set in the same
+-- session. This seed creates accounts with published credentials, so never
+-- apply it to a production database.
 --
 -- Demo login:  demo@kodipms.co.ke
 -- Password:    Demo@2026!
--- Quick PIN:   2026            (demo admin only)
+-- Quick PIN:   2026            (demo admin only; requires a password login on
+--                              the device first, then the refresh cookie)
 -- Domains:     localhost  and  127.0.0.1
 --
 -- The script is idempotent (every insert is INSERT IGNORE) and uses ids in the
@@ -14,6 +20,14 @@
 -- a fresh starting point.
 
 SET NAMES utf8mb4;
+
+CREATE TEMPORARY TABLE demo_seed_guard (
+  confirmed TINYINT NOT NULL,
+  CHECK (confirmed = 1)
+);
+INSERT INTO demo_seed_guard (confirmed)
+VALUES (IF(COALESCE(@demo_seed_confirmed, 'no') = 'yes', 1, 0));
+DROP TEMPORARY TABLE demo_seed_guard;
 
 SET @today        = CURDATE();
 SET @period_start = CAST(DATE_FORMAT(@today, '%Y-%m-01') AS DATE);

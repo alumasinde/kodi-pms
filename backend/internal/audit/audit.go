@@ -29,9 +29,10 @@ func NewLogger(db *sqlx.DB, log *slog.Logger) *Logger {
 	return &Logger{db: db, log: log}
 }
 
-// Log writes one append-only audit row. Callers treat failure as non-fatal:
-// the business transaction has already committed by this point.
-func (l *Logger) Log(ctx context.Context, e Entry) {
+// Log writes one append-only audit row and reports failure. Callers treat it
+// as non-fatal because the business transaction has already committed, but
+// security paths can now observe and surface the error.
+func (l *Logger) Log(ctx context.Context, e Entry) error {
 	oldJSON, err := marshalNullable(e.OldValues)
 	if err != nil {
 		l.log.Warn("marshal audit old values", "action", e.Action, "error", err)
@@ -49,6 +50,7 @@ func (l *Logger) Log(ctx context.Context, e Entry) {
 	if err != nil {
 		l.log.Error("write audit log", "action", e.Action, "entity", e.EntityType, "error", err)
 	}
+	return err
 }
 
 func marshalNullable(v any) ([]byte, error) {

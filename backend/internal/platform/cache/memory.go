@@ -8,8 +8,10 @@ import (
 )
 
 type memoryStore struct {
-	mu sync.RWMutex
-	m  map[string]memoryItem
+	mu        sync.RWMutex
+	m         map[string]memoryItem
+	stop      chan struct{}
+	closeOnce sync.Once
 }
 
 type memoryItem struct {
@@ -18,7 +20,35 @@ type memoryItem struct {
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{m: make(map[string]memoryItem)}
+	s := &memoryStore{m: make(map[string]memoryItem), stop: make(chan struct{})}
+	go s.evictLoop()
+	return s
+}
+
+// Unread keys would otherwise live forever, so the janitor sweeps expired
+// entries instead of relying only on the lazy delete in Get.
+func (s *memoryStore) evictLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.evictExpired()
+		case <-s.stop:
+			return
+		}
+	}
+}
+
+func (s *memoryStore) evictExpired() {
+	now := time.Now()
+	s.mu.Lock()
+	for k, it := range s.m {
+		if !it.expiry.IsZero() && now.After(it.expiry) {
+			delete(s.m, k)
+		}
+	}
+	s.mu.Unlock()
 }
 
 func (s *memoryStore) Get(_ context.Context, key string) (string, error) {
@@ -76,6 +106,33 @@ func (s *memoryStore) Incr(_ context.Context, key string) (int64, error) {
 	return n, nil
 }
 
+func (s *memoryStore) IncrTTL(_ context.Context, key string, ttl time.Duration) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	it, ok := s.m[key]
+	if !ok || (!it.expiry.IsZero() && now.After(it.expiry)) {
+		it = memoryItem{value: "1"}
+		if ttl > 0 {
+			it.expiry = now.Add(ttl)
+		}
+		s.m[key] = it
+		return 1, nil
+	}
+	n, err := strconv.ParseInt(it.value, 10, 64)
+	if err != nil {
+		n = 0
+	}
+	n++
+	it.value = strconv.FormatInt(n, 10)
+	if it.expiry.IsZero() && ttl > 0 {
+		it.expiry = now.Add(ttl)
+	}
+	s.m[key] = it
+	return n, nil
+}
+
 func (s *memoryStore) Expire(_ context.Context, key string, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,4 +149,7 @@ func (s *memoryStore) Expire(_ context.Context, key string, ttl time.Duration) e
 	return nil
 }
 
-func (s *memoryStore) Close() error { return nil }
+func (s *memoryStore) Close() error {
+	s.closeOnce.Do(func() { close(s.stop) })
+	return nil
+}

@@ -23,6 +23,7 @@ type Principal struct {
 	Perms              map[string]struct{} `json:"permissions"`
 	Scope              Scope               `json:"scope"`
 	MustChangePassword bool                `json:"must_change_password"`
+	TokenVersion       uint64              `json:"token_version"`
 }
 
 func (p *Principal) Can(perm string) bool {

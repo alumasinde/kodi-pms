@@ -11,7 +11,8 @@ import (
 )
 
 // RateLimit is a fixed-window counter. If the cache is unavailable it fails
-// open: rate limiting must not take the API down.
+// open: rate limiting must not take the API down. Authentication lockouts are
+// also enforced against the database, so this is a second layer.
 func RateLimit(store cache.Store, limit int, window time.Duration, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,13 +25,10 @@ func RateLimit(store cache.Store, limit int, window time.Duration, keyFn func(*h
 				next.ServeHTTP(w, r)
 				return
 			}
-			n, err := store.Incr(r.Context(), key)
+			n, err := store.IncrTTL(r.Context(), key, window)
 			if err != nil {
 				next.ServeHTTP(w, r)
 				return
-			}
-			if n == 1 {
-				_ = store.Expire(r.Context(), key, window)
 			}
 			if n > int64(limit) {
 				w.Header().Set("Retry-After", strconv.Itoa(int(window.Seconds())))

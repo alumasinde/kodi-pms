@@ -27,6 +27,8 @@ type Config struct {
 	CookieDomain    string
 	PublicBaseURL   string
 	CORSOrigins     []string
+	SMTPURL         string
+	MailFrom        string
 	TrustProxy      bool
 	RateLimitIP     int
 	RateLimitUser   int
@@ -36,8 +38,16 @@ type Config struct {
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
+	envName := env("APP_ENV", "development")
+	local := envName == "development" || envName == "test"
+	publicBase, corsDefault := "", ""
+	if local {
+		publicBase = "http://localhost:5173"
+		corsDefault = "http://localhost:5173,http://localhost:3000"
+	}
+
 	cfg := &Config{
-		Env:             env("APP_ENV", "development"),
+		Env:             envName,
 		HTTPAddr:        env("HTTP_ADDR", ":8080"),
 		DatabaseURL:     strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		RedisAddr:       strings.TrimSpace(os.Getenv("REDIS_ADDR")),
@@ -47,10 +57,12 @@ func Load() (*Config, error) {
 		TokenIssuer:     env("TOKEN_ISSUER", "kodipms"),
 		AccessTTL:       envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTTL:      envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
-		CookieSecure:    envBool("COOKIE_SECURE", false),
+		CookieSecure:    envBool("COOKIE_SECURE", !local),
 		CookieDomain:    os.Getenv("COOKIE_DOMAIN"),
-		PublicBaseURL:   strings.TrimRight(env("PUBLIC_BASE_URL", "http://localhost:5173"), "/"),
-		CORSOrigins:     envList("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"),
+		PublicBaseURL:   strings.TrimRight(env("PUBLIC_BASE_URL", publicBase), "/"),
+		CORSOrigins:     envList("CORS_ORIGINS", corsDefault),
+		SMTPURL:         strings.TrimSpace(os.Getenv("SMTP_URL")),
+		MailFrom:        strings.TrimSpace(os.Getenv("MAIL_FROM")),
 		TrustProxy:      envBool("TRUST_PROXY", false),
 		RateLimitIP:     envInt("RATE_LIMIT_IP_PER_MIN", 300),
 		RateLimitUser:   envInt("RATE_LIMIT_USER_PER_MIN", 600),
@@ -61,7 +73,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
 	if cfg.JWTSecret == "" {
-		if cfg.Env != "development" {
+		if !cfg.IsDevelopment() {
 			return nil, fmt.Errorf("JWT_SECRET is required outside development")
 		}
 		cfg.JWTSecret = "dev-only-jwt-secret-change-me-0123456789"
@@ -72,10 +84,53 @@ func Load() (*Config, error) {
 	if cfg.AccessTTL <= 0 || cfg.RefreshTTL <= 0 {
 		return nil, fmt.Errorf("token TTLs must be positive")
 	}
+	if !cfg.IsDevelopment() {
+		if cfg.RedisAddr == "" {
+			return nil, fmt.Errorf("REDIS_ADDR is required outside development")
+		}
+		if !cfg.CookieSecure {
+			return nil, fmt.Errorf("COOKIE_SECURE must be true outside development")
+		}
+		if err := validateHTTPSURL("PUBLIC_BASE_URL", cfg.PublicBaseURL); err != nil {
+			return nil, err
+		}
+		if len(cfg.CORSOrigins) == 0 {
+			return nil, fmt.Errorf("CORS_ORIGINS is required outside development")
+		}
+		for _, origin := range cfg.CORSOrigins {
+			if err := validateHTTPSURL("CORS_ORIGINS entry", origin); err != nil {
+				return nil, err
+			}
+		}
+		if cfg.SMTPURL == "" || cfg.MailFrom == "" {
+			return nil, fmt.Errorf("SMTP_URL and MAIL_FROM are required outside development")
+		}
+	}
 	return cfg, nil
 }
 
-func (c *Config) IsDevelopment() bool { return c.Env == "development" }
+func (c *Config) IsDevelopment() bool { return c.Env == "development" || c.Env == "test" }
+
+func validateHTTPSURL(name, raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("%s is required outside development", name)
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return fmt.Errorf("%s must be an absolute https URL", name)
+	}
+	if isLocalHost(u.Hostname()) {
+		return fmt.Errorf("%s must not point at localhost outside development", name)
+	}
+	return nil
+}
+
+func isLocalHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" ||
+		host == "0.0.0.0" || strings.HasSuffix(host, ".localhost")
+}
 
 // MySQLDSN accepts either a golang-migrate style URL
 // (mysql://user:pass@tcp(127.0.0.1:3306)/db) or a native go-sql-driver DSN,

@@ -82,6 +82,14 @@ func (a *Authenticator) Authenticate(next http.Handler) http.Handler {
 			a.failLoad(w, err)
 			return
 		}
+		if claims.TokenVersion != p.TokenVersion {
+			a.log.Warn("access token version mismatch",
+				"request_id", middleware.RequestIDFrom(r.Context()),
+				"user_id", userID, "token_version", claims.TokenVersion,
+				"current_version", p.TokenVersion)
+			httpx.Fail(w, httpx.ErrInvalidToken)
+			return
+		}
 
 		var switchOrgID uint64
 		if rawHeader := strings.TrimSpace(r.Header.Get("X-Org-ID")); rawHeader != "" {

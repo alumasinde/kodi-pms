@@ -8,10 +8,14 @@ import (
 
 func ClientIP(r *http.Request, trustProxy bool) string {
 	if trustProxy {
+		// Use the rightmost hop. The left entry is client-supplied and
+		// spoofable; each proxy appends the address it actually saw.
 		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			first := strings.TrimSpace(strings.Split(fwd, ",")[0])
-			if ip := normalizeIP(first); ip != "" {
-				return ip
+			parts := strings.Split(fwd, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				if ip := normalizeIP(parts[i]); ip != "" {
+					return ip
+				}
 			}
 		}
 		if real := normalizeIP(r.Header.Get("X-Real-IP")); real != "" {

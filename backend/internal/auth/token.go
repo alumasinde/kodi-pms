@@ -16,7 +16,8 @@ import (
 )
 
 type Claims struct {
-	OrgID uint64 `json:"org"`
+	OrgID        uint64 `json:"org"`
+	TokenVersion uint64 `json:"ver"`
 	jwt.RegisteredClaims
 }
 
@@ -34,12 +35,13 @@ func NewTokenService(cfg *config.Config) *TokenService {
 	}
 }
 
-func (s *TokenService) NewAccess(userID, orgID uint64) (raw, jti string, expiresAt time.Time, err error) {
+func (s *TokenService) NewAccess(userID, orgID, tokenVersion uint64) (raw, jti string, expiresAt time.Time, err error) {
 	now := time.Now().UTC()
 	expiresAt = now.Add(s.accessTTL)
 	jti = uuid.NewString()
 	claims := Claims{
-		OrgID: orgID,
+		OrgID:        orgID,
+		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.issuer,
 			Subject:   strconv.FormatUint(userID, 10),

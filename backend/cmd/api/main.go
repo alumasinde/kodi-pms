@@ -16,6 +16,7 @@ import (
 	"kodipms/internal/platform/config"
 	"kodipms/internal/platform/database"
 	"kodipms/internal/platform/logger"
+	"kodipms/internal/platform/mailer"
 	"kodipms/internal/rbac"
 	"kodipms/internal/routes"
 )
@@ -49,10 +50,16 @@ func main() {
 	}
 	defer func() { _ = store.Close() }()
 
+	mail, err := mailer.New(cfg.SMTPURL, cfg.MailFrom, log)
+	if err != nil {
+		log.Error("mailer unavailable", "error", err)
+		os.Exit(1)
+	}
+
 	loader := rbac.NewLoader(db, store, log)
 	auditLog := audit.NewLogger(db, log)
 	tokens := auth.NewTokenService(cfg)
-	authSvc := auth.NewService(cfg, db, tokens, loader, auditLog, store, log)
+	authSvc := auth.NewService(cfg, db, tokens, loader, auditLog, store, mail, log)
 
 	handler := routes.New(routes.Deps{
 		Config:        cfg,

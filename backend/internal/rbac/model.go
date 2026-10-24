@@ -7,6 +7,7 @@ type userState struct {
 	OrganizationID     sql.NullInt64 `db:"organization_id"`
 	Status             string        `db:"status"`
 	MustChangePassword bool          `db:"must_change_password"`
+	TokenVersion       uint64        `db:"token_version"`
 }
 
 type roleRow struct {

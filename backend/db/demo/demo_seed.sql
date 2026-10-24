@@ -14,10 +14,11 @@
 --                              the device first, then the refresh cookie)
 -- Domains:     localhost  and  127.0.0.1
 --
--- The script is idempotent (every insert is INSERT IGNORE) and uses ids in the
--- 9000 range. Re-running it will not duplicate rows and will not overwrite demo
--- data edited during a session. Apply it to a clean demo database when you want
--- a fresh starting point.
+-- The script is idempotent: rows use ids in the 9000 range and are inserted
+-- with INSERT IGNORE (allocations are guarded with NOT EXISTS because the
+-- allocation triggers run before duplicate-key checks). Re-running it will not
+-- duplicate rows and will not overwrite demo data edited during a session.
+-- Apply it to a clean demo database when you want a fresh starting point.
 
 SET NAMES utf8mb4;
 
@@ -65,21 +66,21 @@ VALUES
   (9002, 9001, '127.0.0.1', 0, NOW());
 
 INSERT IGNORE INTO users
-  (id, organization_id, email, phone, password_hash, pin_hash, must_change_password, first_name, last_name, national_id, status, email_verified_at, phone_verified_at)
+  (id, organization_id, email, phone, password_hash, pin_hash, must_change_password, first_name, last_name, status, email_verified_at, phone_verified_at)
 VALUES
   (9001, 9001, 'demo@kodipms.co.ke', '+254700000001',
    '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO',
    '$2y$12$Lj/9jGwMtyfsnvHbeA/28uUWZiziASMAdxT0ldioneqkyqzqtLvUy', 0,
-   'Demo', 'Admin', '12345678', 'active', NOW(), NOW()),
+   'Demo', 'Admin', 'active', NOW(), NOW()),
   (9002, 9001, 'owner.demo@kodipms.co.ke', '+254700000002',
    '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', NULL, 0,
-   'Peter', 'Mwangi', '23456789', 'inactive', NOW(), NOW()),
+   'Peter', 'Mwangi', 'inactive', NOW(), NOW()),
   (9003, 9001, 'brian.otieno@example.test', '+254700000003',
    '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', NULL, 0,
-   'Brian', 'Otieno', '34567890', 'inactive', NOW(), NOW()),
+   'Brian', 'Otieno', 'inactive', NOW(), NOW()),
   (9004, 9001, 'faith.wanjiku@example.test', '+254700000004',
    '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', NULL, 0,
-   'Faith', 'Wanjiku', '45678901', 'inactive', NOW(), NOW());
+   'Faith', 'Wanjiku', 'inactive', NOW(), NOW());
 
 INSERT IGNORE INTO user_roles (user_id, role_id)
 SELECT 9001, id FROM roles WHERE name = 'org_admin' AND organization_id IS NULL;
@@ -94,15 +95,15 @@ INSERT IGNORE INTO user_roles (user_id, role_id)
 SELECT 9004, id FROM roles WHERE name = 'tenant' AND organization_id IS NULL;
 
 INSERT IGNORE INTO owners
-  (id, organization_id, user_id, company, kra_pin, management_fee_percent, payout_method, payout_mpesa_number)
+  (id, organization_id, user_id, company, management_fee_percent, payout_method)
 VALUES
-  (9001, 9001, 9002, 'Mwangi Holdings', 'P059876543Y', 8.00, 'mpesa', '+254700000002');
+  (9001, 9001, 9002, 'Mwangi Holdings', 8.00, 'mpesa');
 
 INSERT IGNORE INTO tenants
-  (id, organization_id, user_id, kra_pin, emergency_contact, emergency_phone, employment, employer_name, income)
+  (id, organization_id, user_id, emergency_contact, emergency_phone, employment, employer_name)
 VALUES
-  (9001, 9001, 9003, 'A012345678Z', 'Mary Otieno', '+254711000003', 'Employed', 'Safaricom PLC', 120000.00),
-  (9002, 9001, 9004, 'A098765432Z', 'James Wanjiku', '+254711000004', 'Self-employed', 'Wanjiku Studios', 95000.00);
+  (9001, 9001, 9003, 'Mary Otieno', '+254711000003', 'Employed', 'Safaricom PLC'),
+  (9002, 9001, 9004, 'James Wanjiku', '+254711000004', 'Self-employed', 'Wanjiku Studios');
 
 INSERT IGNORE INTO properties
   (id, organization_id, owner_id, type_id, name, code, address, estate, town, county, postal_code, country_code, status, notes)
@@ -111,12 +112,12 @@ VALUES
    'Kilimani', 'Nairobi', 'Nairobi', '00100', 'KE', 'active', 'Four-unit demo block.');
 
 INSERT IGNORE INTO units
-  (id, property_id, type_id, number, floor, bedrooms, bathrooms, square_feet, rent, status)
+  (id, organization_id, property_id, type_id, number, floor, bedrooms, bathrooms, square_feet, rent, status)
 VALUES
-  (9001, 9001, @ut_2bed,      'A1', 1, 2, 2.0, 95, 45000.00, 'occupied'),
-  (9002, 9001, @ut_1bed,      'A2', 1, 1, 1.0, 65, 35000.00, 'occupied'),
-  (9003, 9001, @ut_bedsitter, 'A3', 2, 0, 1.0, 35, 18000.00, 'vacant'),
-  (9004, 9001, @ut_2bed,      'A4', 2, 2, 2.0, 95, 48000.00, 'maintenance');
+  (9001, 9001, 9001, @ut_2bed,      'A1', 1, 2, 2.0, 95, 45000.00, 'occupied'),
+  (9002, 9001, 9001, @ut_1bed,      'A2', 1, 1, 1.0, 65, 35000.00, 'occupied'),
+  (9003, 9001, 9001, @ut_bedsitter, 'A3', 2, 0, 1.0, 35, 18000.00, 'vacant'),
+  (9004, 9001, 9001, @ut_2bed,      'A4', 2, 2, 2.0, 95, 48000.00, 'maintenance');
 
 INSERT IGNORE INTO property_amenities (property_id, amenity_id)
 SELECT 9001, id FROM amenities
@@ -143,25 +144,25 @@ VALUES
   (9002, 9001, 9002, CONCAT('KD-L-', YEAR(@lease2_start), '-002'), @lease2_start, @lease2_end,
    35000.00, 70000.00, 1, 5, 30, 'active', DATE_ADD(@lease2_start, INTERVAL 9 HOUR), 9001);
 
-INSERT IGNORE INTO lease_tenants (lease_id, tenant_id, role)
+INSERT IGNORE INTO lease_tenants (organization_id, lease_id, tenant_id, role)
 VALUES
-  (9001, 9001, 'primary'),
-  (9002, 9002, 'primary');
+  (9001, 9001, 9001, 'primary'),
+  (9001, 9002, 9002, 'primary');
 
-INSERT IGNORE INTO deposits (id, lease_id, amount, date_paid, status)
+INSERT IGNORE INTO deposits (id, organization_id, lease_id, amount, date_paid, status)
 VALUES
-  (9001, 9001, 90000.00, @lease1_start, 'held'),
-  (9002, 9002, 70000.00, @lease2_start, 'held');
+  (9001, 9001, 9001, 90000.00, @lease1_start, 'held'),
+  (9002, 9001, 9002, 70000.00, @lease2_start, 'held');
 
 INSERT IGNORE INTO invoices
   (id, organization_id, lease_id, invoice_number, invoice_type, billing_period_start, billing_period_end,
    issue_date, due_date, subtotal, tax_total, total, amount_paid, status, notes, created_by)
 VALUES
   (9001, 9001, 9001, CONCAT('INV-KD-', DATE_FORMAT(@period_start, '%Y%m'), '-001'), 'rent',
-   @period_start, @period_end, @period_start, @due_date, 49375.00, 0.00, 49375.00, 49375.00,
+   @period_start, @period_end, @period_start, @due_date, 49375.00, 0.00, 49375.00, 0.00,
    'paid', 'Monthly rent, water, garbage and parking.', 9001),
   (9002, 9001, 9002, CONCAT('INV-KD-', DATE_FORMAT(@period_start, '%Y%m'), '-002'), 'rent',
-   @period_start, @period_end, @period_start, @due_date, 36340.00, 0.00, 36340.00, 20000.00,
+   @period_start, @period_end, @period_start, @due_date, 36340.00, 0.00, 36340.00, 0.00,
    'partially_paid', 'Monthly rent, water and garbage.', 9001);
 
 INSERT IGNORE INTO utility_meters
@@ -183,15 +184,15 @@ VALUES
   (9002, 9002, 9002, 9002, 9002, 'water', 840.00, @due_date, @period_start, @period_end, 'billed');
 
 INSERT IGNORE INTO invoice_items
-  (id, invoice_id, item_type, description, quantity, unit_price, tax_rate, amount, source_type, source_id)
+  (id, organization_id, invoice_id, item_type, description, quantity, unit_price, tax_rate, amount, source_type, source_id)
 VALUES
-  (9001, 9001, 'rent',    'Monthly rent - A1',          1.000, 45000.00, 0.00, 45000.00, NULL, NULL),
-  (9002, 9001, 'water',   'Water consumption - 12.5 m3', 12.500,   150.00, 0.00,  1875.00, 'utility_bill', 9001),
-  (9003, 9001, 'garbage', 'Garbage collection',          1.000,   500.00, 0.00,   500.00, NULL, NULL),
-  (9004, 9001, 'parking', 'Parking bay P1',              1.000,  2000.00, 0.00,  2000.00, NULL, NULL),
-  (9005, 9002, 'rent',    'Monthly rent - A2',           1.000, 35000.00, 0.00, 35000.00, NULL, NULL),
-  (9006, 9002, 'water',   'Water consumption - 5.6 m3',   5.600,   150.00, 0.00,   840.00, 'utility_bill', 9002),
-  (9007, 9002, 'garbage', 'Garbage collection',           1.000,   500.00, 0.00,   500.00, NULL, NULL);
+  (9001, 9001, 9001, 'rent',    'Monthly rent - A1',          1.000, 45000.00, 0.00, 45000.00, NULL, NULL),
+  (9002, 9001, 9001, 'water',   'Water consumption - 12.5 m3', 12.500,   150.00, 0.00,  1875.00, 'utility_bill', 9001),
+  (9003, 9001, 9001, 'garbage', 'Garbage collection',          1.000,   500.00, 0.00,   500.00, NULL, NULL),
+  (9004, 9001, 9001, 'parking', 'Parking bay P1',              1.000,  2000.00, 0.00,  2000.00, NULL, NULL),
+  (9005, 9001, 9002, 'rent',    'Monthly rent - A2',           1.000, 35000.00, 0.00, 35000.00, NULL, NULL),
+  (9006, 9001, 9002, 'water',   'Water consumption - 5.6 m3',   5.600,   150.00, 0.00,   840.00, 'utility_bill', 9002),
+  (9007, 9001, 9002, 'garbage', 'Garbage collection',           1.000,   500.00, 0.00,   500.00, NULL, NULL);
 
 INSERT IGNORE INTO payments
   (id, organization_id, lease_id, payment_method_id, amount, paid_at, reference, status, received_by, notes)
@@ -199,37 +200,51 @@ VALUES
   (9001, 9001, 9001, @mpesa_paybill, 49375.00, @payment1_at, 'SKQ4DEMO01', 'completed', 9001, 'M-Pesa Paybill.'),
   (9002, 9001, 9002, @mpesa_paybill, 20000.00, @payment2_at, 'SKQ4DEMO02', 'completed', 9001, 'Partial M-Pesa payment.');
 
-INSERT IGNORE INTO payment_allocations (id, payment_id, invoice_id, amount)
+INSERT IGNORE INTO payment_allocations (id, organization_id, payment_id, invoice_id, amount)
+SELECT 9001, 9001, 9001, 9001, 49375.00 FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM payment_allocations WHERE id = 9001);
+
+INSERT IGNORE INTO payment_allocations (id, organization_id, payment_id, invoice_id, amount)
+SELECT 9002, 9001, 9002, 9002, 20000.00 FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM payment_allocations WHERE id = 9002);
+
+INSERT IGNORE INTO mpesa_shortcodes
+  (id, organization_id, shortcode, account_type, environment, is_active)
 VALUES
-  (9001, 9001, 9001, 49375.00),
-  (9002, 9002, 9002, 20000.00);
+  (9001, 9001, '600000', 'paybill', 'sandbox', 1);
+
+INSERT IGNORE INTO mpesa_account_refs
+  (id, organization_id, shortcode_id, lease_id, account_reference)
+VALUES
+  (9001, 9001, 9001, 9001, 'KD-001-A1'),
+  (9002, 9001, 9001, 9002, 'KD-001-A2');
 
 INSERT IGNORE INTO mpesa_transactions
-  (id, organization_id, trans_id, trans_type, business_short_code, bill_ref_number, msisdn, first_name,
-   amount, trans_time, status, payment_id, raw_payload)
+  (id, organization_id, trans_id, trans_type, business_short_code, shortcode_id, bill_ref_number, lease_id,
+   msisdn, first_name, amount, trans_time, status, payment_id, raw_payload)
 VALUES
-  (9001, 9001, 'SKQ4DEMO01', 'Pay Bill', '600000', 'KD-001-A1', '254700000003', 'BRIAN',
+  (9001, 9001, 'SKQ4DEMO01', 'Pay Bill', '600000', 9001, 'KD-001-A1', 9001, '254700000003', 'BRIAN',
    49375.00, @payment1_at, 'matched', 9001,
    '{"TransID":"SKQ4DEMO01","TransAmount":"49375.00","BillRefNumber":"KD-001-A1","MSISDN":"254700000003"}'),
-  (9002, 9001, 'SKQ4DEMO02', 'Pay Bill', '600000', 'KD-001-A2', '254700000004', 'FAITH',
+  (9002, 9001, 'SKQ4DEMO02', 'Pay Bill', '600000', 9001, 'KD-001-A2', 9002, '254700000004', 'FAITH',
    20000.00, @payment2_at, 'matched', 9002,
    '{"TransID":"SKQ4DEMO02","TransAmount":"20000.00","BillRefNumber":"KD-001-A2","MSISDN":"254700000004"}'),
-  (9003, 9001, 'SKQ4DEMO03', 'Pay Bill', '600000', 'KD-001-A1', '254700000005', 'UNKNOWN',
+  (9003, 9001, 'SKQ4DEMO03', 'Pay Bill', '600000', 9001, 'KD-001-A1', 9001, '254700000005', 'UNKNOWN',
    10000.00, @unmatched_at, 'unmatched', NULL,
    '{"TransID":"SKQ4DEMO03","TransAmount":"10000.00","BillRefNumber":"KD-001-A1","MSISDN":"254700000005"}');
 
 INSERT IGNORE INTO mpesa_stk_requests
-  (id, organization_id, lease_id, invoice_id, phone, amount, merchant_request_id, checkout_request_id,
+  (id, organization_id, shortcode_id, lease_id, invoice_id, phone, amount, merchant_request_id, checkout_request_id,
    status, result_code, result_desc, mpesa_receipt, payment_id)
 VALUES
-  (9001, 9001, 9001, 9001, '+254700000003', 49375.00, 'demo-merchant-1', 'ws_CO_DEMO_9001',
+  (9001, 9001, 9001, 9001, 9001, '+254700000003', 49375.00, 'demo-merchant-1', 'ws_CO_DEMO_9001',
    'success', 0, 'The service request is processed successfully.', 'SKQ4DEMO01', 9001);
 
 INSERT IGNORE INTO contractors
-  (id, organization_id, user_id, company, contact, phone, email, specialty, kra_pin, status)
+  (id, organization_id, user_id, company, contact, phone, email, specialty, status)
 VALUES
   (9001, 9001, NULL, 'SwiftFix Plumbers', 'John Kariuki', '+254722000001', 'jobs@swiftfix.test',
-   'Plumbing', 'P051112223Q', 'active');
+   'Plumbing', 'active');
 
 INSERT IGNORE INTO maintenance_requests
   (id, organization_id, unit_id, tenant_id, assigned_to, title, description, priority, status, date_requested)
@@ -261,9 +276,9 @@ VALUES
   (9001, 9001, 'Kitchen', 'good', 1, 'Clean and functional.'),
   (9002, 9001, 'Bathroom', 'fair', 1, 'Minor grout wear.');
 
-INSERT IGNORE INTO reviews (id, tenant_id, property_id, rating, content, date_submitted)
+INSERT IGNORE INTO reviews (id, organization_id, tenant_id, property_id, rating, content, date_submitted)
 VALUES
-  (9001, 9001, 9001, 4, 'Quiet compound and responsive management.',
+  (9001, 9001, 9001, 9001, 4, 'Quiet compound and responsive management.',
    DATE_SUB(@today, INTERVAL 1 MONTH));
 
 INSERT IGNORE INTO notifications

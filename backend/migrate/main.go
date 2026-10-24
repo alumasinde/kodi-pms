@@ -18,7 +18,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -45,10 +44,7 @@ func main() {
 	if dsn == "" {
 		log.Fatal("DATABASE_URL is not set, e.g. mysql://user:pass@tcp(127.0.0.1:3306)/rental")
 	}
-	dsn, err := withMultiStatements(dsn)
-	if err != nil {
-		log.Fatalf("invalid DATABASE_URL: %v", err)
-	}
+	dsn = withMultiStatements(dsn)
 
 	m, err := migrate.New("file://"+*path, dsn)
 	if err != nil {
@@ -145,17 +141,13 @@ func intArg(args []string) (int, bool) {
 }
 
 // Migration files contain several statements, so the driver needs multiStatements=true.
-func withMultiStatements(raw string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", err
+// Do not parse this with net/url: the DSN authority is tcp(host:port), which
+// net/url rejects as an invalid port.
+func withMultiStatements(raw string) string {
+	if strings.Contains(raw, "?") {
+		return raw + "&multiStatements=true"
 	}
-	q := u.Query()
-	if !strings.EqualFold(q.Get("multiStatements"), "true") {
-		q.Set("multiStatements", "true")
-	}
-	u.RawQuery = q.Encode()
-	return u.String(), nil
+	return raw + "?multiStatements=true"
 }
 
 func envOr(k, def string) string {

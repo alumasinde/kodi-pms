@@ -13,27 +13,32 @@ import (
 )
 
 type Config struct {
-	Env             string
-	HTTPAddr        string
-	DatabaseURL     string
-	RedisAddr       string
-	RedisPassword   string
-	RedisDB         int
-	JWTSecret       string
-	TokenIssuer     string
-	AccessTTL       time.Duration
-	RefreshTTL      time.Duration
-	CookieSecure    bool
-	CookieDomain    string
-	PublicBaseURL   string
-	CORSOrigins     []string
-	SMTPURL         string
-	MailFrom        string
-	TrustProxy      bool
-	RateLimitIP     int
-	RateLimitUser   int
-	ShutdownTimeout time.Duration
+	Env              string
+	HTTPAddr         string
+	DatabaseURL      string
+	RedisAddr        string
+	RedisPassword    string
+	RedisDB          int
+	JWTSecret        string
+	TokenIssuer      string
+	AccessTTL        time.Duration
+	RefreshTTL       time.Duration
+	PIIEncryptionKey string
+	CookieSecure     bool
+	CookieDomain     string
+	PublicBaseURL    string
+	CORSOrigins      []string
+	SMTPURL          string
+	MailFrom         string
+	TrustProxy       bool
+	RateLimitIP      int
+	RateLimitUser    int
+	ShutdownTimeout  time.Duration
 }
+
+// devPIIKey is base64 for 32 ASCII bytes. It is only used when APP_ENV is
+// development/test; production refuses to start without PII_ENCRYPTION_KEY.
+const devPIIKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
@@ -47,26 +52,27 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Env:             envName,
-		HTTPAddr:        env("HTTP_ADDR", ":8080"),
-		DatabaseURL:     strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		RedisAddr:       strings.TrimSpace(os.Getenv("REDIS_ADDR")),
-		RedisPassword:   os.Getenv("REDIS_PASSWORD"),
-		RedisDB:         envInt("REDIS_DB", 0),
-		JWTSecret:       os.Getenv("JWT_SECRET"),
-		TokenIssuer:     env("TOKEN_ISSUER", "kodipms"),
-		AccessTTL:       envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
-		RefreshTTL:      envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
-		CookieSecure:    envBool("COOKIE_SECURE", !local),
-		CookieDomain:    os.Getenv("COOKIE_DOMAIN"),
-		PublicBaseURL:   strings.TrimRight(env("PUBLIC_BASE_URL", publicBase), "/"),
-		CORSOrigins:     envList("CORS_ORIGINS", corsDefault),
-		SMTPURL:         strings.TrimSpace(os.Getenv("SMTP_URL")),
-		MailFrom:        strings.TrimSpace(os.Getenv("MAIL_FROM")),
-		TrustProxy:      envBool("TRUST_PROXY", false),
-		RateLimitIP:     envInt("RATE_LIMIT_IP_PER_MIN", 300),
-		RateLimitUser:   envInt("RATE_LIMIT_USER_PER_MIN", 600),
-		ShutdownTimeout: envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
+		Env:              envName,
+		HTTPAddr:         env("HTTP_ADDR", ":8080"),
+		DatabaseURL:      strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		RedisAddr:        strings.TrimSpace(os.Getenv("REDIS_ADDR")),
+		RedisPassword:    os.Getenv("REDIS_PASSWORD"),
+		RedisDB:          envInt("REDIS_DB", 0),
+		JWTSecret:        os.Getenv("JWT_SECRET"),
+		TokenIssuer:      env("TOKEN_ISSUER", "kodipms"),
+		AccessTTL:        envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTTL:       envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		PIIEncryptionKey: strings.TrimSpace(os.Getenv("PII_ENCRYPTION_KEY")),
+		CookieSecure:     envBool("COOKIE_SECURE", !local),
+		CookieDomain:     os.Getenv("COOKIE_DOMAIN"),
+		PublicBaseURL:    strings.TrimRight(env("PUBLIC_BASE_URL", publicBase), "/"),
+		CORSOrigins:      envList("CORS_ORIGINS", corsDefault),
+		SMTPURL:          strings.TrimSpace(os.Getenv("SMTP_URL")),
+		MailFrom:         strings.TrimSpace(os.Getenv("MAIL_FROM")),
+		TrustProxy:       envBool("TRUST_PROXY", false),
+		RateLimitIP:      envInt("RATE_LIMIT_IP_PER_MIN", 300),
+		RateLimitUser:    envInt("RATE_LIMIT_USER_PER_MIN", 600),
+		ShutdownTimeout:  envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -83,6 +89,12 @@ func Load() (*Config, error) {
 	}
 	if cfg.AccessTTL <= 0 || cfg.RefreshTTL <= 0 {
 		return nil, fmt.Errorf("token TTLs must be positive")
+	}
+	if cfg.PIIEncryptionKey == "" {
+		if !cfg.IsDevelopment() {
+			return nil, fmt.Errorf("PII_ENCRYPTION_KEY is required outside development")
+		}
+		cfg.PIIEncryptionKey = devPIIKey
 	}
 	if !cfg.IsDevelopment() {
 		if cfg.RedisAddr == "" {
@@ -139,33 +151,21 @@ func (c *Config) MySQLDSN() (string, error) {
 	raw := strings.TrimSpace(c.DatabaseURL)
 	var mc *mysql.Config
 	if strings.HasPrefix(raw, "mysql://") {
-		u, err := url.Parse(raw)
+		// golang-migrate style URL. mysql.ParseDSN already understands the
+		// user:pass@tcp(host:port)/db part; net/url rejects tcp(...) authorities
+		// because it treats the closing paren as part of the port.
+		parsed, err := mysql.ParseDSN(strings.TrimPrefix(raw, "mysql://"))
 		if err != nil {
 			return "", fmt.Errorf("parse DATABASE_URL: %w", err)
 		}
-		mc = mysql.NewConfig()
-		if u.User != nil {
-			mc.User = u.User.Username()
-			mc.Passwd, _ = u.User.Password()
+		// The URL form percent-encodes credentials; the driver DSN form does not.
+		if parsed.User, err = url.PathUnescape(parsed.User); err != nil {
+			return "", fmt.Errorf("parse DATABASE_URL user: %w", err)
 		}
-		host := u.Host
-		switch {
-		case strings.HasPrefix(host, "tcp(") && strings.HasSuffix(host, ")"):
-			mc.Net, mc.Addr = "tcp", strings.TrimSuffix(strings.TrimPrefix(host, "tcp("), ")")
-		case strings.HasPrefix(host, "unix(") && strings.HasSuffix(host, ")"):
-			mc.Net, mc.Addr = "unix", strings.TrimSuffix(strings.TrimPrefix(host, "unix("), ")")
-		default:
-			mc.Net, mc.Addr = "tcp", host
+		if parsed.Passwd, err = url.PathUnescape(parsed.Passwd); err != nil {
+			return "", fmt.Errorf("parse DATABASE_URL password: %w", err)
 		}
-		mc.DBName = strings.TrimPrefix(u.Path, "/")
-		if u.RawQuery != "" {
-			mc.Params = map[string]string{}
-			for k, v := range u.Query() {
-				if len(v) > 0 {
-					mc.Params[k] = v[len(v)-1]
-				}
-			}
-		}
+		mc = parsed
 	} else {
 		parsed, err := mysql.ParseDSN(raw)
 		if err != nil {

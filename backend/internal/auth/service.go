@@ -98,7 +98,7 @@ func (s *Service) Login(ctx context.Context, org *tenancy.Organization, in Login
 		return nil, httpx.ErrTooMany
 	}
 
-	u, err := s.repo.FindUserByIdentifier(ctx, who)
+	u, err := s.repo.FindUserByIdentifier(ctx, org.ID, who)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func (s *Service) LoginWithPIN(ctx context.Context, org *tenancy.Organization, i
 		return nil, httpx.ErrTooMany
 	}
 
-	u, err := s.repo.FindUserByIdentifier(ctx, who)
+	u, err := s.repo.FindUserByIdentifier(ctx, org.ID, who)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -474,7 +474,7 @@ func (s *Service) resetWorker() {
 }
 
 func (s *Service) deliverPasswordReset(ctx context.Context, job resetJob) {
-	u, err := s.repo.FindUserByIdentifier(ctx, job.who)
+	u, err := s.repo.FindUserByIdentifier(ctx, job.org.ID, job.who)
 	if err != nil || u.Status != "active" {
 		return
 	}
@@ -756,7 +756,7 @@ func (s *Service) Invite(ctx context.Context, p *rbac.Principal, in InviteInput,
 		return nil, httpx.ErrForbidden
 	}
 
-	existing, err := s.repo.FindInviteUserByEmail(ctx, email)
+	existing, err := s.repo.FindInviteUserByEmail(ctx, p.OrgID, email)
 	if errors.Is(err, sql.ErrNoRows) {
 		existing = nil
 	} else if err != nil {
@@ -767,7 +767,7 @@ func (s *Service) Invite(ctx context.Context, p *rbac.Principal, in InviteInput,
 			return nil, httpx.Conflict("A user with this email already exists")
 		}
 	}
-	taken, err := s.repo.PhoneTakenByOther(ctx, phone, inviteUserID(existing))
+	taken, err := s.repo.PhoneTakenByOther(ctx, p.OrgID, phone, inviteUserID(existing))
 	if err != nil {
 		return nil, err
 	}

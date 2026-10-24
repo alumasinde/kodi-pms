@@ -17,6 +17,7 @@ import (
 	"kodipms/internal/platform/database"
 	"kodipms/internal/platform/logger"
 	"kodipms/internal/platform/mailer"
+	"kodipms/internal/platform/pii"
 	"kodipms/internal/rbac"
 	"kodipms/internal/routes"
 )
@@ -61,6 +62,13 @@ func main() {
 	tokens := auth.NewTokenService(cfg)
 	authSvc := auth.NewService(cfg, db, tokens, loader, auditLog, store, mail, log)
 
+	piiCipher, err := pii.New(cfg.PIIEncryptionKey)
+	if err != nil {
+		log.Error("pii key invalid", "error", err)
+		os.Exit(1)
+	}
+	piiAccess := pii.NewAccessLog(db, log)
+
 	handler := routes.New(routes.Deps{
 		Config:        cfg,
 		Logger:        log,
@@ -68,6 +76,8 @@ func main() {
 		Store:         store,
 		AuthHandler:   auth.NewHandler(authSvc, cfg),
 		Authenticator: auth.NewAuthenticator(tokens, loader, store, log),
+		PII:           piiCipher,
+		PIIAccess:     piiAccess,
 	})
 
 	srv := &http.Server{
@@ -81,6 +91,8 @@ func main() {
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	authSvc.StartTokenCleanup(sigCtx)
 
 	go func() {
 		log.Info("api listening", "addr", cfg.HTTPAddr, "env", cfg.Env)

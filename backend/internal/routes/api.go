@@ -14,6 +14,7 @@ import (
 	"kodipms/internal/platform/config"
 	"kodipms/internal/platform/httpx"
 	"kodipms/internal/platform/middleware"
+	"kodipms/internal/platform/pii"
 	"kodipms/internal/tenancy"
 )
 
@@ -24,6 +25,8 @@ type Deps struct {
 	Store         cache.Store
 	AuthHandler   *auth.Handler
 	Authenticator *auth.Authenticator
+	PII           *pii.Cipher
+	PIIAccess     *pii.AccessLog
 }
 
 func New(deps Deps) http.Handler {

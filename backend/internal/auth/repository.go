@@ -19,13 +19,16 @@ const userColumns = `
 const refreshColumns = `
 	id, user_id, organization_id, family_id, expires_at, revoked_at, rotated_at, grace_used_at`
 
-func (r *repository) FindUserByIdentifier(ctx context.Context, identifier string) (*UserRow, error) {
+func (r *repository) FindUserByIdentifier(ctx context.Context, orgID uint64, identifier string) (*UserRow, error) {
 	var u UserRow
 	err := r.db.GetContext(ctx, &u, `
 		SELECT `+userColumns+`
 		FROM users
-		WHERE (email = ? OR phone = ?) AND deleted_at IS NULL
-		LIMIT 1`, identifier, identifier)
+		WHERE deleted_at IS NULL
+		  AND (organization_id = ? OR organization_id IS NULL)
+		  AND (email = ? OR phone = ?)
+		ORDER BY (organization_id IS NULL) ASC, id ASC
+		LIMIT 1`, orgID, identifier, identifier)
 	if err != nil {
 		return nil, err
 	}
@@ -271,23 +274,29 @@ func (r *repository) RoleForInvite(ctx context.Context, roleID, orgID uint64) (*
 	return &role, nil
 }
 
-func (r *repository) FindInviteUserByEmail(ctx context.Context, email string) (*InviteUserRow, error) {
+func (r *repository) FindInviteUserByEmail(ctx context.Context, orgID uint64, email string) (*InviteUserRow, error) {
 	var u InviteUserRow
 	err := r.db.GetContext(ctx, &u, `
-		SELECT id, organization_id, status FROM users WHERE email = ? LIMIT 1`, email)
+		SELECT id, organization_id, status
+		FROM users
+		WHERE organization_id = ? AND email = ? AND deleted_at IS NULL
+		LIMIT 1`, orgID, email)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
-func (r *repository) PhoneTakenByOther(ctx context.Context, phone string, userID uint64) (bool, error) {
+func (r *repository) PhoneTakenByOther(ctx context.Context, orgID uint64, phone string, userID uint64) (bool, error) {
 	if phone == "" {
 		return false, nil
 	}
 	var count int
 	err := r.db.GetContext(ctx, &count, `
-		SELECT COUNT(*) FROM users WHERE phone = ? AND id <> ?`, phone, userID)
+		SELECT COUNT(*)
+		FROM users
+		WHERE organization_id = ? AND phone = ? AND id <> ? AND deleted_at IS NULL`,
+		orgID, phone, userID)
 	return count > 0, err
 }
 

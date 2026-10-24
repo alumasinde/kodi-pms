@@ -1,6 +1,6 @@
 # Property Management System - Code Guide (Kenya)
 
-Backend implementation guide for the rental / property management platform: Go + MySQL 8 + Redis, built on the schema in `db/migrations` (migrations 000001-000011).
+Backend implementation guide for the rental / property management platform: Go + MySQL 8 + Redis, built on the schema in `db/migrations` (migrations 000001-000018).
 Each module section gives: **purpose, endpoints, who can do what, what it queries, what it returns, Redis usage, code skeleton, and automations.**
 
 > The code is a pattern to copy, not a framework lock-in. Examples use `net/http` + `chi`, `sqlx`, `go-redis/v9`, `shopspring/decimal`. Swap freely, but keep the layering and the rules in section 1.
@@ -59,6 +59,9 @@ Every module has the same four files:
 6. **Money = `decimal.Decimal`** (JSON as string `"12500.00"`). Never `float64`.
 7. **Time**: DB timestamps are UTC; business dates (`due_date`, `start_date`) are `DATE` in the org timezone (`Africa/Nairobi`). Jobs compute "today" using the org timezone.
 8. **Soft delete** (`deleted_at`) on users, properties, units, organizations: every read adds `deleted_at IS NULL`.
+9. **Users are unique per organization, not globally.** The same email/phone may belong to two orgs; every login/reset/invite lookup filters the resolved host org (plus `organization_id IS NULL` for platform admins). Soft-deleting a user releases the email and phone.
+10. **Money is derived, never trusted.** `invoices.amount_paid` comes from live payment allocations; allocations are immutable, payments cannot be deleted or moved, and every money event posts to `ledger_entries`. Use tenant credit, credit notes and `payment_reversals` instead of editing or deleting money rows.
+11. **Sensitive PII is encrypted and access-logged.** National ID, KRA PIN, income and payout details are AES-256-GCM ciphertext (`pii.Cipher`); reading them with `tenants.view_sensitive` must write a `pii_access_logs` row. Never log or return the plaintext outside that path.
 
 ### 1.3 Response envelope
 ```json
@@ -164,9 +167,11 @@ r.Route("/api/v1", func(r chi.Router) {
 |---|---|---|---|
 | `domain:{host}` | `{org_id, name, logo, currency}` | 1h | resolve miss; DEL on `organization_domains` change |
 | `authzver:{orgID}` | int version | none | `INCR` whenever roles/permissions/assignments change |
-| `authz:{userID}:{ver}` | roles, perms, scope (JSON) | 10m | built on first request after login/change; the version in the key makes stale entries unreachable |
+| `authzver:user:{userID}` | int version | none | `INCR` on password reset/change; invalidates only that user's principals |
+| `authz:{userID}:{orgID}:{ver}:{uver}` | roles, perms, scope (JSON) | 2m | built on first request after login/change; both versions make stale entries unreachable |
 | `jwt:deny:{jti}` | 1 | until token expiry | logout / password change |
-| `rl:login:{ip}:{email}` | counter | 15m | login failures; lock at 5 |
+| `rl:login:{ip}:{email}` | counter | 15m | login failures; lock at 5 (atomic `INCR`+`EXPIRE`) |
+| `rl:pin:{ip}:{email}` | counter | 15m | PIN failures; the DB account lock is authoritative |
 | `rl:api:{userID}` / `rl:ip:{ip}` | counter | 1m | rate limiter |
 | `otp:{phone}` | hashed code + attempts | 5m | optional SMS OTP |
 | `settings:org:{orgID}` | hash of org-level settings | 10m | DEL on settings write |
@@ -198,30 +203,43 @@ func Cached[T any](ctx context.Context, rdb *redis.Client, key string, ttl time.
 | Method & path | Auth | Purpose |
 |---|---|---|
 | `POST /auth/login` | public | email or phone + password -> tokens |
-| `POST /auth/refresh` | refresh token | rotate refresh token, new access token |
+| `POST /auth/pin-login` | public | 4-6 digit PIN on a device with a live refresh token from a password login |
+| `POST /auth/refresh` | refresh token | rotate refresh token, new access token; 30s one-use grace for retries |
 | `POST /auth/logout` | access | revoke refresh family, deny-list access jti |
-| `POST /auth/forgot-password` | public | always returns 200 (no account enumeration); sends SMS/email link |
-| `POST /auth/reset-password` | token | set new password, revoke all sessions |
+| `POST /auth/forgot-password` | public | always returns 200 (no account enumeration); queued lookup + SMTP link |
+| `POST /auth/reset-password` | token | set new password, bump token version, revoke all sessions |
 | `POST /auth/accept-invite` | token | invited user sets password |
-| `POST /auth/change-password` | access | also revokes other sessions |
+| `POST /auth/invites` | access + `users.create` | invite or re-invite a user and deliver the link |
+| `POST /auth/change-password` | access | bump token version and revoke other sessions |
 | `GET /auth/me` | access | profile + roles + permissions + scope summary + org branding |
 
 ### 3.2 Token design
-- **Access token**: JWT, 15 min, claims `sub` (user id), `org`, `jti`. **No permissions inside**, so permission changes take effect immediately.
+- **Access token**: JWT, 15 min, claims `sub` (user id), `org`, `jti`, and `ver` (the user's `token_version`). **No permissions inside**, so permission changes take effect immediately; a password reset/change increments `ver` and invalidates existing access tokens.
 - **Refresh token**: 32 random bytes, base64url, returned once. Only `sha256(token)` is stored in `refresh_tokens`. 30 days. Web: `HttpOnly; Secure; SameSite=Lax` cookie. Mobile: secure storage.
-- **Rotation + reuse detection**: each refresh revokes the presented token and issues a new one in the same `family_id`. If an already-revoked token is presented, someone stole it: revoke the whole family.
+- **Rotation + reuse detection**: each refresh revokes the presented token and issues a new one in the same `family_id`. A revoked token is accepted once for 30 seconds if the family still has a live token (a dropped-response retry); any other reuse revokes the family and writes `refresh_reuse_detected` to `audit_logs`.
+- **PIN**: 4-6 digits, bcrypt-hashed, and only usable with the refresh token of a device that already authenticated with a password. PIN and password failures share a DB-backed 5-failure/15-minute account lock.
 - Passwords: `bcrypt` cost 12 (or argon2id). Minimum 8 chars; reject top-common passwords.
 
 ### 3.3 Login flow
 ```
 1. rate-limit key rl:login:{ip}:{email}; >=5 failures -> 429 for 15 min
-2. SELECT id, organization_id, password_hash, status, must_change_password
-   FROM users WHERE (email = ? OR phone = ?) AND deleted_at IS NULL
-3. constant-time compare (run bcrypt on a dummy hash if user not found)
-4. status must be 'active'; org status must be 'active' (skip org check for system_admin)
-5. host org (tenancy.Resolve) must equal users.organization_id, unless system_admin
-6. issue tokens, INSERT refresh_tokens, UPDATE users.last_login_at
-7. clear rl:login key, write audit_logs ('login'), return tokens + /me payload
+2. SELECT id, organization_id, password_hash, status, must_change_password,
+          failed_login_attempts, locked_until
+   FROM users
+   WHERE deleted_at IS NULL
+     AND (organization_id = ? OR organization_id IS NULL)   -- resolved host org
+     AND (email = ? OR phone = ?)
+   ORDER BY (organization_id IS NULL) ASC, id ASC            -- org user before platform admin
+   LIMIT 1
+3. reject while users.locked_until is in the future; constant-time compare
+   (run bcrypt on a dummy hash if user not found)
+4. on failure, increment failed_login_attempts under a row lock and set
+   locked_until at 5; write login_failed/login_locked to audit_logs
+5. status must be 'active'; org status must be 'active' (skip org check for system_admin)
+6. host org (tenancy.Resolve) must equal users.organization_id, unless system_admin
+7. issue tokens (with users.token_version as `ver`), INSERT refresh_tokens,
+   UPDATE users.last_login_at and clear the lock counters
+8. clear rl:login key, write audit_logs ('login'), return tokens + /me payload
 ```
 ```go
 func (s *Service) Login(ctx context.Context, in LoginInput, meta ClientMeta) (*Session, error) {
@@ -233,12 +251,12 @@ func (s *Service) Login(ctx context.Context, in LoginInput, meta ClientMeta) (*S
 	if err == nil { hash = u.PasswordHash }
 	ok := bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)) == nil
 	if err != nil || !ok || u.Status != "active" {
-		s.rdb.Incr(ctx, key); s.rdb.Expire(ctx, key, 15*time.Minute)
+		s.store.IncrTTL(ctx, key, 15*time.Minute) // one atomic INCR + PEXPIRE
 		return nil, &httpx.Err{Status: 401, Code: "invalid_credentials", Message: "Invalid email/phone or password"}
 	}
 	s.rdb.Del(ctx, key)
 
-	access, jti, exp := s.tokens.NewAccess(u.ID, u.OrganizationID)
+	access, jti, exp := s.tokens.NewAccess(u.ID, u.OrganizationID, u.TokenVersion)
 	refresh, hash2 := s.tokens.NewRefresh()
 	family := uuid.NewString()
 	if err := s.repo.InsertRefresh(ctx, u.ID, family, hash2, meta, time.Now().Add(30*24*time.Hour)); err != nil { return nil, err }
@@ -254,9 +272,13 @@ func (s *Service) Refresh(ctx context.Context, raw string, meta ClientMeta) (*Se
 	h := sha256Hex(raw)
 	rt, err := s.repo.FindRefresh(ctx, h) // SELECT ... FROM refresh_tokens WHERE token_hash = ?
 	if err != nil { return nil, httpx.ErrUnauthorized }
-	if rt.RevokedAt != nil {                       // reuse => theft
-		_ = s.repo.RevokeFamily(ctx, rt.FamilyID)
-		return nil, httpx.ErrUnauthorized
+	if rt.RevokedAt != nil {
+		// A token rotated <30s ago may be retried once if its family still has
+		// a live token (dropped response); otherwise reuse => theft.
+		if s.withinGrace(ctx, rt) { /* allow one retry */ } else {
+			_ = s.repo.RevokeFamily(ctx, rt.FamilyID)
+			return nil, httpx.ErrUnauthorized
+		}
 	}
 	if time.Now().After(rt.ExpiresAt) { return nil, httpx.ErrUnauthorized }
 	tx, _ := s.db.BeginTxx(ctx, nil)
@@ -265,7 +287,7 @@ func (s *Service) Refresh(ctx context.Context, raw string, meta ClientMeta) (*Se
 	newRaw, newHash := s.tokens.NewRefresh()
 	_ = s.repo.InsertRefreshTx(ctx, tx, rt.UserID, rt.FamilyID, newHash, meta, time.Now().Add(30*24*time.Hour))
 	if err := tx.Commit(); err != nil { return nil, err }
-	access, jti, exp := s.tokens.NewAccess(rt.UserID, rt.OrgID)
+	access, jti, exp := s.tokens.NewAccess(rt.UserID, rt.OrgID, rt.TokenVersion)
 	return &Session{Access: access, AccessExp: exp, Refresh: newRaw, JTI: jti}, nil
 }
 ```
@@ -279,12 +301,16 @@ func (a *Authn) Authenticate(next http.Handler) http.Handler {
 		ctx := r.Context()
 		if a.rdb.Exists(ctx, "jwt:deny:"+claims.ID).Val() == 1 { httpx.Fail(w, httpx.ErrUnauthorized); return }
 
-		ver, _ := a.rdb.Get(ctx, fmt.Sprintf("authzver:%d", claims.OrgID)).Int()
-		key := fmt.Sprintf("authz:%d:%d", claims.UserID, ver)
-		p, err := Cached(ctx, a.rdb, key, 10*time.Minute, func() (*rbac.Principal, error) {
-			return a.loader.Load(ctx, claims.UserID, claims.OrgID) // DB: roles, perms, scope
+		userID, err := strconv.ParseUint(claims.Subject, 10, 64)
+		if err != nil { httpx.Fail(w, httpx.ErrUnauthorized); return }
+		orgVer, _ := a.rdb.Get(ctx, fmt.Sprintf("authzver:%d", claims.OrgID)).Int()
+		userVer, _ := a.rdb.Get(ctx, fmt.Sprintf("authzver:user:%d", userID)).Int()
+		key := fmt.Sprintf("authz:%d:%d:%d:%d", userID, claims.OrgID, orgVer, userVer)
+		p, err := Cached(ctx, a.rdb, key, 2*time.Minute, func() (*rbac.Principal, error) {
+			return a.loader.Load(ctx, userID, claims.OrgID) // DB: roles, perms, scope
 		})
 		if err != nil { httpx.Fail(w, httpx.ErrUnauthorized); return }
+		if claims.TokenVersion != p.TokenVersion { httpx.Fail(w, httpx.ErrUnauthorized); return }
 		next.ServeHTTP(w, r.WithContext(rbac.WithPrincipal(ctx, p)))
 	})
 }
@@ -305,7 +331,7 @@ The frontend builds its menu from `permissions` (e.g. show "Leases" if `leases.v
 
 ### 3.7 Gotchas
 - Same response + timing for unknown user vs wrong password.
-- Changing password / disabling a user: delete their `refresh_tokens`, `INCR authzver:{org}`, deny-list current jti.
+- Changing password / disabling a user: delete their `refresh_tokens`, bump `users.token_version` and `INCR authzver:user:{id}`, deny-list current jti. Only role/permission changes need the org-wide `authzver:{org}` bump.
 - `system_admin` has `organization_id = NULL`; they operate on an org by sending `X-Org-ID`, which is honoured **only** for that role and audit-logged.
 
 ---
@@ -418,10 +444,43 @@ Returns own lease summary, balance, payment history, pay-now info (paybill + acc
 ### 4.5 Field-level masking
 One serializer per entity checks a permission, so DTOs differ by role without separate endpoints:
 ```go
-func TenantView(t Tenant, p *rbac.Principal) TenantDTO {
+func TenantView(ctx context.Context, t Tenant, p *rbac.Principal, crypt *pii.Cipher, access *pii.AccessLog, req Meta) TenantDTO {
 	d := TenantDTO{ID: t.ID, Name: t.FirstName + " " + t.LastName, Phone: t.Phone}
 	if p.Can("tenants.view_sensitive") {
-		d.NationalID, d.KraPin, d.Income, d.Employer = &t.NationalID, &t.KraPin, &t.Income, &t.Employer
+		d.NationalID = decryptOptional(crypt, t.NationalIDEnc) // AES-256-GCM
+		d.KraPin = decryptOptional(crypt, t.KraPinEnc)
+		d.Income = decryptOptional(crypt, t.IncomeEnc)
+		d.Employer = t.EmployerName
+		_ = access.Record(ctx, pii.AccessEntry{
+			OrganizationID: p.OrgID, UserID: p.UserID,
+			SubjectType: "tenants", SubjectID: t.ID,
+			Fields: []string{"national_id", "kra_pin", "income"},
+			Reason: "tenant profile", IPAddress: req.IP, UserAgent: req.UserAgent,
+		})
+	} else {
+		d.NationalIDLast4 = t.NationalIDLast4 // mask, never decrypt
 	}
 	return d
 }
+```
+The encrypted columns are `national_id_enc`, `kra_pin_enc`, `income_enc` and the
+owner `payout_*_enc` columns. `national_id_hash` supports duplicate detection
+without decryption. Do not add plaintext values to logs, audit payloads or
+exports; `pii_access_logs` is the record of who read them.
+
+### 4.6 Schema guarantees added in 000013-000018
+- Users are unique per organization while live; login/reset/invite lookups are
+  host-org scoped. Units carry `organization_id`, and lease/billing/deposit/
+  document/insurance/review children use composite `(organization_id, id)` FKs;
+  messages carry `organization_id` and validate both participants by trigger.
+  One active lease per unit is enforced by a generated column + unique key.
+- `invoices.amount_paid` is derived from allocations by triggers; allocations
+  cannot exceed the payment or invoice balance; allocations are immutable and
+  payments cannot be deleted or moved between orgs/leases (reverse the payment
+  instead). `ledger_entries`, `tenant_credit_entries` and `pii_access_logs`
+  reject UPDATE/DELETE.
+- Owner statements/commissions/disbursements and per-org M-Pesa shortcodes and
+  account references are modelled in 000015-000016.
+- PII is AES-256-GCM ciphertext; retention policies and the append-only access
+  log live in 000017. All timestamps are DATETIME (2038-safe) and the API purges
+  expired refresh/one-time tokens hourly.

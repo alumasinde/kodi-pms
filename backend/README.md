@@ -44,7 +44,9 @@ instance. Password-reset and invite delivery also require `SMTP_URL` and
 `PII_ENCRYPTION_KEY` must be base64 for 32 bytes (`openssl rand -base64 32`)
 outside development; development falls back to a published key. Changing the
 key makes existing encrypted PII unreadable. Expired refresh and one-time
-tokens are purged hourly by the API process.
+tokens are purged hourly by the API process, and so are leases whose end date
+has passed (they become `expired`; the unit stays occupied until it is
+terminated or renewed).
 
 ### Auth endpoints
 | Method & path | Auth | Notes |
@@ -112,6 +114,147 @@ Latitude and longitude must end up either both set or both cleared. Lookup lists
 cached for 1 hour under `lookup:property_types` and `lookup:amenities`. Writes
 are audited as `properties.created`, `properties.updated` and
 `properties.deleted`.
+
+### Users endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/users` | access + `users.view` | paginated staff directory for the resolved organization; filters `q` (name/email/phone), `status`, `role_id`; `sort` accepts first_name, last_name, email, status, last_login_at, created_at, updated_at with a `-` prefix for descending |
+| `GET /api/v1/users/lookups` | access + `users.view` | roles of this organization for the role picker |
+| `GET /api/v1/users/{id}` | access + `users.view` | user detail, including `national_id_last4` and verification timestamps |
+| `GET /api/v1/users/{id}/assignments` | access + `users.view` | property assignments (manager / caretaker) for that user |
+| `POST /api/v1/users` | access + `users.create` | creates a user with roles and an optional national ID |
+| `PATCH /api/v1/users/{id}` | access + `users.update` | partial update; roles, password, status and national ID are all patchable |
+| `PUT /api/v1/users/{id}/assignments` | access + `users.update` | replaces the whole assignment list (`[]` clears it) |
+| `DELETE /api/v1/users/{id}` | access + `users.delete` | soft delete plus session revoke; never your own account |
+
+`role_ids` is required and every role must belong to this organization.
+`org_admin` and `system_admin` can only be granted by a caller who already holds
+that role, so nobody escalates past their own rank. Email is validated with
+`net/mail` and lowercased, phone must be E.164 (`+` then 7-19 digits), and the
+password goes through the same `auth.ValidatePassword` rules as sign-up (8-72
+characters, not blank, not on the common-password list). `must_change_password`
+defaults to `true` so an admin-set password is forced to change on first login.
+`national_id` is encrypted with AES-256-GCM, hashed (keyed HMAC) for duplicate
+detection and stored with only the last 4 digits readable; the module never
+selects the ciphertext or the hash, and `""` / `null` in a `PATCH` clears it.
+A duplicate live email or phone inside the organization is a 409; a national ID
+that is already on another user is rejected on `national_id`.
+On your own account `role_ids`, `password` and `status` are rejected — change a
+password through the auth flow, not here. Setting a password or moving a user
+off `active` revokes their refresh tokens, marks issued tokens used, and (for a
+status change) bumps `users.token_version` so an already-issued access token
+dies at the next request. An `org_admin` cannot be suspended or demoted, and
+cannot be deleted, while they are the organization's only active administrator
+(409). Any role or assignment change bumps the org authorization cache version,
+so the next request reloads permissions for everyone affected.
+Roles are cached for 1 hour under `lookup:user_roles:{orgID}`. Writes are
+audited as `users.created`, `users.updated`, `users.deleted` and
+`users.assignments_updated`; audit payloads record only `national_id_last4`.
+
+### Units endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/units` | access + `units.view` | paginated list narrowed to the caller's property scope; filters `q` (unit number, property name/code), `status`, `property_id`, `type_id`; `sort` accepts number, rent, floor, bedrooms, status, created_at, updated_at, property with a `-` prefix for descending |
+| `GET /api/v1/units/lookups` | access + `units.view` | unit types and amenities for form dropdowns |
+| `GET /api/v1/units/{id}` | access + `units.view` | unit with amenities and, when leased, the current occupant |
+| `POST /api/v1/units` | access + `units.create` | creates one unit in a property |
+| `POST /api/v1/units/generate` | access + `units.create` | creates a whole block of sequentially numbered units sharing one template |
+| `PATCH /api/v1/units/{id}` | access + `units.update` | partial update; `property_id` is immutable |
+| `DELETE /api/v1/units/{id}` | access + `units.delete` | soft delete, refused while an active lease exists |
+
+`property_id` and `type_id` must reference a property inside the caller's scope
+and a real unit type; an out-of-scope property reads as a validation error
+rather than leaking the property. `number` is unique per property including
+soft-deleted rows, matching `uq_units_property_number`, so a cleared door keeps
+its number reserved. `status` is one of `vacant`, `occupied`, `reserved`,
+`maintenance`, `inactive`, and `occupied` can never be set by hand — the lease
+module owns it. On `PATCH`, a unit with an active lease cannot be moved away
+from `occupied` or deleted. `floor` accepts `-1` (basement) down to `-10` and up
+to `200`; `bedrooms` 0-50; `bathrooms` is rounded to one decimal, money fields
+to cents. Omit a field to leave it unchanged and send `null` to clear `floor` or
+`square_feet`; `number` and `status` are required, so an empty string is a
+validation error rather than a clear.
+`amenity_ids` replaces the unit's amenities when sent (`[]` clears).
+`generate` builds numbers as `prefix` + zero-padded counter starting at
+`first_number` (default 1) for `count` units (1-200); `pad` is 0-5, the prefix
+is at most 10 characters and cannot contain the SQL wildcards `%` or `_`. If any
+number in the run already exists, the request 409s with the offending list and
+nothing is created. Lookup lists are cached for 1 hour under
+`lookup:unit_types` and `lookup:amenities`. Writes are audited as
+`units.created`, `units.generated`, `units.updated` and `units.deleted`.
+
+### Leases endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/leases` | access + `leases.view` | paginated list narrowed to the caller's scope; filters `q` (lease number, unit, property, tenant name/email), `status`, `property_id`, `unit_id`, `tenant_id`; `sort` accepts number, start_date, end_date, rent, deposit, status, unit, property, created_at, updated_at |
+| `GET /api/v1/leases/{id}` | access + `leases.view` | lease with its tenant roster and deposit history |
+| `GET /api/v1/leases/{id}/tenants` | access + `leases.view` | roster only, ordered primary, co-tenant, guarantor, occupant |
+| `PUT /api/v1/leases/{id}/tenants` | access + `leases.update` | replaces the roster; body `{"tenants":[{"tenant_id":1,"role":"primary"}]}` |
+| `POST /api/v1/leases` | access + `leases.create` | creates a **draft**; `unit_id`, `start_date`, `rent_amount` required |
+| `PATCH /api/v1/leases/{id}` | access + `leases.update` | partial update, only while the lease is a draft or pending signature |
+| `DELETE /api/v1/leases/{id}` | access + `leases.delete` | hard delete, draft leases only (mirrors the seeded "delete draft leases" permission) |
+| `POST /api/v1/leases/{id}/activate` | access + `leases.activate` | body optional; `signed_at` overrides the default of now, and a positive deposit opens its pending record |
+| `POST /api/v1/leases/{id}/terminate` | access + `leases.terminate` | `reason` required; `terminated_at` optional |
+| `POST /api/v1/leases/{id}/renew` | access + `leases.renew` | body optional; returns the new lease with 201 |
+
+A lease is created as `draft` and `status` is never a writable field — the strict
+JSON decoder rejects it. Movement between the six statuses in
+`chk_leases_status` happens only through activate, terminate and renew, and each
+endpoint refuses rows in the wrong state with 409. Listing and detail reads obey
+both halves of a caller's scope: a lease is visible if its property is assigned
+to them **or** their tenant record appears on its roster, so a tenant sees their
+own agreements and a caretaker who also rents sees both. An id outside that set
+returns 404 rather than 403.
+
+`unit_id` must be a live unit inside the caller's scope, and neither the unit nor
+its property may be archived. `uq_leases_active_unit` (the generated
+`active_unit_id` column) allows one active lease per door, so activating a second
+one 409s with the number of the lease already holding it. Occupancy follows the
+lease: activate sets `units.status = 'occupied'`, terminate frees it back to
+`vacant`, and renew carries it straight across.
+
+`lease_number` is optional. Left out, it is generated as
+`{property code}-L-{year}-{NNN}` — the same scheme the demo data uses — falling
+back to `L-{year}-{NNN}` when the property has no code; the counter is read under
+a row lock and the unique index `uq_leases_org_number` has the final word. A
+supplied number must be at most 50 characters with no control characters, and a
+number already used in the organization 409s.
+
+Money is rounded to cents: `rent_amount` must be greater than zero and at most
+9999999999.99, `deposit_amount` between 0 and the same ceiling. `billing_day` and
+`due_day` are limited to 1-28 because the schema rejects 29-31, month-ends
+notwithstanding; `notice_period_days` is 0-3650. Dates are `YYYY-MM-DD`,
+timestamps also accept RFC3339, and `end_date` cannot precede `start_date`. A
+null `end_date` is an open-ended periodic tenancy; sending `null` on `PATCH`
+clears it. Up to 20 roster entries are accepted per request, duplicates collapse,
+roles are `primary`, `co_tenant`, `guarantor` or `occupant`, only one tenant can
+be primary, and every `tenant_id` must belong to this organization with a live
+user. Activation additionally requires a primary tenant and a positive rent.
+
+Renewal starts where the old lease ended (one day after `end_date`, or
+422 asking for `start_date` when the lease is open-ended) and runs `months`
+(1-120, default 12) minus one day unless `end_date` is given. Billing and due
+days, notice period, rent and deposit carry over unless the request overrides
+them. The old row is flipped to `renewed` before the new `active` row is
+inserted, in one transaction, so the active-unit key never collides; the roster
+is copied and the money already collected stays recorded against the lease it was
+paid on. Termination accepts an optional `terminated_at` (never before the
+lease start) and stores the reason.
+
+Activating a lease with a positive `deposit_amount` opens one `pending` deposit
+record for it — the obligation, not the money; a payment later moves it to
+`held`. A lease that already carries a deposit keeps it, so nothing doubles on a
+re-activation. `date_paid` and the refund tables belong to the billing module, as
+do invoices.
+
+An hourly sweep in the API process (started next to the token purge in
+`cmd/api/main.go`) flips `active` leases whose `end_date` has passed to
+`expired`. Open-ended leases are never touched, and the unit stays `occupied`
+because a holdover tenant is still in the door — terminate or renew is what frees
+it. Writes are audited as `leases.created`, `leases.updated`, `leases.deleted`,
+`leases.activated`, `leases.terminated`, `leases.renewed` and
+`leases.tenants_updated`; the sweep is logged, not audited, because it has no
+requesting user.
 
 ## Migration order
 | #  | File                           | Tables |

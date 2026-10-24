@@ -10,6 +10,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"kodipms/internal/auth"
+	"kodipms/internal/leases"
 	"kodipms/internal/platform/cache"
 	"kodipms/internal/platform/config"
 	"kodipms/internal/platform/httpx"
@@ -19,6 +20,8 @@ import (
 	"kodipms/internal/rbac"
 	"kodipms/internal/settings"
 	"kodipms/internal/tenancy"
+	"kodipms/internal/units"
+	"kodipms/internal/users"
 )
 
 type Deps struct {
@@ -30,6 +33,9 @@ type Deps struct {
 	Authenticator     *auth.Authenticator
 	SettingsHandler   *settings.Handler
 	PropertiesHandler *properties.Handler
+	UnitsHandler      *units.Handler
+	UsersHandler      *users.Handler
+	LeasesHandler     *leases.Handler
 	PII               *pii.Cipher
 	PIIAccess         *pii.AccessLog
 }
@@ -76,6 +82,9 @@ func New(deps Deps) http.Handler {
 			pr.Use(rbac.RequirePasswordChanged)
 			deps.SettingsHandler.Routes(pr)
 			deps.PropertiesHandler.Routes(pr)
+			deps.UnitsHandler.Routes(pr)
+			deps.UsersHandler.Routes(pr)
+			deps.LeasesHandler.Routes(pr)
 		})
 	})
 

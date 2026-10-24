@@ -12,6 +12,7 @@ import (
 
 	"kodipms/internal/audit"
 	"kodipms/internal/auth"
+	"kodipms/internal/leases"
 	"kodipms/internal/platform/cache"
 	"kodipms/internal/platform/config"
 	"kodipms/internal/platform/database"
@@ -22,6 +23,8 @@ import (
 	"kodipms/internal/rbac"
 	"kodipms/internal/routes"
 	"kodipms/internal/settings"
+	"kodipms/internal/units"
+	"kodipms/internal/users"
 )
 
 func main() {
@@ -73,6 +76,10 @@ func main() {
 	}
 	piiAccess := pii.NewAccessLog(db, log)
 
+	unitsSvc := units.NewService(db, store, auditLog, log)
+	usersSvc := users.NewService(db, store, auditLog, piiCipher, log)
+	leasesSvc := leases.NewService(db, auditLog, log)
+
 	handler := routes.New(routes.Deps{
 		Config:            cfg,
 		Logger:            log,
@@ -82,6 +89,9 @@ func main() {
 		Authenticator:     auth.NewAuthenticator(tokens, loader, store, log),
 		SettingsHandler:   settings.NewHandler(settingsSvc, cfg),
 		PropertiesHandler: properties.NewHandler(propertiesSvc, cfg),
+		UnitsHandler:      units.NewHandler(unitsSvc, cfg),
+		UsersHandler:      users.NewHandler(usersSvc, cfg),
+		LeasesHandler:     leases.NewHandler(leasesSvc, cfg),
 		PII:               piiCipher,
 		PIIAccess:         piiAccess,
 	})
@@ -99,6 +109,7 @@ func main() {
 	defer stop()
 
 	authSvc.StartTokenCleanup(sigCtx)
+	leasesSvc.StartExpirySweep(sigCtx)
 
 	go func() {
 		log.Info("api listening", "addr", cfg.HTTPAddr, "env", cfg.Env)

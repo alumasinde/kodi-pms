@@ -12,8 +12,8 @@ ALTER TABLE users
   DROP INDEX idx_users_national_id,
   DROP COLUMN national_id,
   ADD COLUMN national_id_enc VARBINARY(1024) NULL AFTER last_name,
-  ADD COLUMN national_id_hash BINARY(32) NULL AFTER national_id_enc,
-  ADD COLUMN national_id_last4 CHAR(4) NULL AFTER national_id_hash,
+  ADD COLUMN national_id_hash BINARY(32) NULL,
+  ADD COLUMN national_id_last4 CHAR(4) NULL,
   ADD COLUMN pii_retention_until DATE NULL,
   ADD COLUMN pii_anonymized_at DATETIME NULL,
   ADD KEY idx_users_national_id_hash (national_id_hash);
@@ -33,8 +33,8 @@ ALTER TABLE owners
   DROP COLUMN payout_account_name,
   ADD COLUMN kra_pin_enc VARBINARY(1024) NULL AFTER company,
   ADD COLUMN payout_mpesa_number_enc VARBINARY(1024) NULL AFTER payout_method,
-  ADD COLUMN payout_bank_name_enc VARBINARY(1024) NULL AFTER payout_mpesa_number_enc,
-  ADD COLUMN payout_account_name_enc VARBINARY(1024) NULL AFTER payout_bank_name_enc,
+  ADD COLUMN payout_bank_name_enc VARBINARY(1024) NULL,
+  ADD COLUMN payout_account_name_enc VARBINARY(1024) NULL,
   ADD COLUMN pii_retention_until DATE NULL,
   ADD COLUMN pii_anonymized_at DATETIME NULL;
 

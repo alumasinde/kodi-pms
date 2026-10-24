@@ -36,7 +36,6 @@ ALTER TABLE properties ADD UNIQUE KEY uq_properties_org_id (organization_id, id)
 ALTER TABLE leases     ADD UNIQUE KEY uq_leases_org_id (organization_id, id);
 ALTER TABLE invoices   ADD UNIQUE KEY uq_invoices_org_id (organization_id, id);
 ALTER TABLE payments   ADD UNIQUE KEY uq_payments_org_id (organization_id, id);
-ALTER TABLE deposits   ADD UNIQUE KEY uq_deposits_org_id (organization_id, id);
 
 -- Properties and their owner must belong to the same organization.
 ALTER TABLE properties ADD KEY idx_properties_org_owner (organization_id, owner_id);
@@ -105,6 +104,7 @@ UPDATE deposits d JOIN leases l ON l.id = d.lease_id
 SET d.organization_id = l.organization_id;
 ALTER TABLE deposits MODIFY organization_id BIGINT UNSIGNED NOT NULL;
 ALTER TABLE deposits
+  ADD UNIQUE KEY uq_deposits_org_id (organization_id, id),
   ADD KEY idx_deposits_org_lease (organization_id, lease_id),
   DROP FOREIGN KEY fk_deposits_lease,
   ADD CONSTRAINT fk_deposits_org

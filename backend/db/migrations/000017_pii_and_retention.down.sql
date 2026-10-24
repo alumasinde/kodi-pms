@@ -18,8 +18,8 @@ ALTER TABLE owners
   DROP COLUMN kra_pin_enc,
   ADD COLUMN kra_pin VARCHAR(20) NULL AFTER company,
   ADD COLUMN payout_mpesa_number VARCHAR(20) NULL AFTER payout_method,
-  ADD COLUMN payout_bank_name VARCHAR(100) NULL AFTER payout_mpesa_number,
-  ADD COLUMN payout_account_name VARCHAR(150) NULL AFTER payout_bank_name;
+  ADD COLUMN payout_bank_name VARCHAR(100) NULL,
+  ADD COLUMN payout_account_name VARCHAR(150) NULL;
 
 ALTER TABLE tenants
   DROP COLUMN pii_anonymized_at,

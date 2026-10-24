@@ -12,18 +12,6 @@ type repository struct {
 	db *sqlx.DB
 }
 
-type userState struct {
-	ID                 uint64        `db:"id"`
-	OrganizationID     sql.NullInt64 `db:"organization_id"`
-	Status             string        `db:"status"`
-	MustChangePassword bool          `db:"must_change_password"`
-}
-
-type roleRow struct {
-	ID   uint64 `db:"id"`
-	Name string `db:"name"`
-}
-
 func (r *repository) UserState(ctx context.Context, userID uint64) (*userState, error) {
 	var u userState
 	err := r.db.GetContext(ctx, &u, `

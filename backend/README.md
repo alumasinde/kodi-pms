@@ -1,7 +1,9 @@
 # Rental / Property Management - Backend (Go, MySQL 8.0.16+, golang-migrate)
 
 ## Layout
-    cmd/api/main.go            # HTTP API wiring and startup
+    cmd/api/main.go            # process startup and dependency wiring only
+    internal/routes/api.go     # global router, middleware and module registration
+    internal/<module>/         # handler, service, repository, routes.go, model.go, dto.go
     internal/                  # platform, tenancy, auth, rbac, modules
     db/migrations/NNNNNN_name.up.sql | .down.sql
     migrate/main.go

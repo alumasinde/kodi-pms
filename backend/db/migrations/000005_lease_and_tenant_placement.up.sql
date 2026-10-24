@@ -32,9 +32,11 @@ CREATE TABLE IF NOT EXISTS leases (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS lease_tenants (
-  lease_id  BIGINT UNSIGNED NOT NULL,
-  tenant_id BIGINT UNSIGNED NOT NULL,
-  role      VARCHAR(20) NOT NULL DEFAULT 'primary',
+  lease_id   BIGINT UNSIGNED NOT NULL,
+  tenant_id  BIGINT UNSIGNED NOT NULL,
+  role       VARCHAR(20) NOT NULL DEFAULT 'primary',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (lease_id, tenant_id),
   KEY idx_lease_tenants_tenant (tenant_id),
   CONSTRAINT fk_lt_lease  FOREIGN KEY (lease_id) REFERENCES leases (id) ON DELETE CASCADE,
@@ -79,6 +81,8 @@ CREATE TABLE IF NOT EXISTS documents (
   file_path     VARCHAR(255) NOT NULL,
   uploaded_by   BIGINT UNSIGNED NULL,
   date_uploaded DATE NOT NULL DEFAULT (CURRENT_DATE),
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_documents_lease (lease_id),
   CONSTRAINT fk_documents_lease    FOREIGN KEY (lease_id) REFERENCES leases (id) ON DELETE CASCADE,
@@ -93,6 +97,8 @@ CREATE TABLE IF NOT EXISTS insurance_policies (
   coverage   DECIMAL(14,2) NOT NULL DEFAULT 0.00,
   start_date DATE NOT NULL,
   end_date   DATE NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_insurance_lease (lease_id),
   CONSTRAINT fk_insurance_lease FOREIGN KEY (lease_id) REFERENCES leases (id) ON DELETE CASCADE

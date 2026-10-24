@@ -1,6 +1,8 @@
-# Rental / Property Management - Database Migrations (MySQL 8.0.16+, golang-migrate)
+# Rental / Property Management - Backend (Go, MySQL 8.0.16+, golang-migrate)
 
 ## Layout
+    cmd/api/main.go            # HTTP API wiring and startup
+    internal/                  # platform, tenancy, auth, rbac, modules
     db/migrations/NNNNNN_name.up.sql | .down.sql
     migrate/main.go
 
@@ -15,12 +17,42 @@
     go run ./migrate down        # roll back one migration
     go run ./migrate version
 
+## Demo data
+    mysql -u user -p rental < db/demo/demo_seed.sql
+
+Demo login: `demo@kodipms.co.ke` / `Demo@2026!`, on the `localhost` domain.
+Apply it only to a dedicated demo database; it uses ids in the 9000 range.
+
+## Running the API
+    cp .env.example .env        # set DATABASE_URL and a real JWT_SECRET
+    go run ./cmd/api
+
+Health: `GET /healthz` and `GET /readyz` (database ping).
+Redis is optional in development; without it the API uses an in-process cache.
+In production a configured-but-unreachable Redis is a startup error.
+
+### Auth endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `POST /api/v1/auth/login` | public | identifier/email/phone + password; host must resolve to the org domain |
+| `POST /api/v1/auth/refresh` | refresh token | cookie or JSON body; rotates the token and detects reuse |
+| `POST /api/v1/auth/forgot-password` | public | always 200; reset link is logged in development only |
+| `POST /api/v1/auth/reset-password` | token | one-time token, invalidates all refresh tokens |
+| `POST /api/v1/auth/accept-invite` | token | one-time invite token, activates the user |
+| `GET /api/v1/auth/me` | access | user, org, roles, permissions, derived data scope |
+| `POST /api/v1/auth/logout` | access | revokes the refresh family and deny-lists the access token |
+| `POST /api/v1/auth/change-password` | access | revokes other refresh tokens |
+
+Access tokens are 15-minute JWTs sent as `Authorization: Bearer`. Refresh tokens
+are 30-day rotating tokens stored only as SHA-256 hashes; the web app receives an
+HttpOnly cookie, mobile clients get the value in the JSON body.
+
 ## Migration order
 | #  | File                           | Tables |
 |----|--------------------------------|--------|
 | 01 | core_administration            | organizations, organization_domains, system_settings |
-| 02 | identity_access                | users, roles, user_roles, owners, agents, tenants |
-| 03 | seed_roles_and_settings        | seed: roles, default settings (KES, late fees...) |
+| 02 | identity_access                | users, roles, permissions, role_permissions, user_roles, refresh_tokens, user_tokens, owners, agents, tenants |
+| 03 | seed_roles_and_settings        | seed: roles, permissions, default role matrix, default settings (KES, late fees...) |
 | 04 | property_and_asset_management  | property_types, unit_types, amenities, properties, units, property_amenities, unit_amenities, parking_spots, property_agents, property_assignments |
 | 05 | lease_and_tenant_placement     | leases, lease_tenants, deposits, deposit_refunds, documents, insurance_policies |
 | 06 | billing_ledger_and_payments    | payment_methods, invoices, invoice_items, payments, payment_allocations, late_fees |

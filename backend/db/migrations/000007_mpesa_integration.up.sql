@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS mpesa_transactions (
   payment_id         BIGINT UNSIGNED NULL,
   raw_payload        JSON NULL,
   created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_mpesa_trans_id (trans_id),
   KEY idx_mpesa_org (organization_id),

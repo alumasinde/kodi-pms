@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS organization_domains (
   is_primary      TINYINT(1) NOT NULL DEFAULT 0,
   verified_at     TIMESTAMP NULL,
   created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_org_domains_domain (domain),
   KEY idx_org_domains_org (organization_id),

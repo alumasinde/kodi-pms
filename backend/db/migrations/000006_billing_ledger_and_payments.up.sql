@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS payment_methods (
   name        VARCHAR(50)  NOT NULL,
   description VARCHAR(255) NULL,
   is_active   TINYINT(1) NOT NULL DEFAULT 1,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_payment_methods_code (code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -52,6 +54,8 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   amount      DECIMAL(12,2) NOT NULL,
   source_type VARCHAR(50) NULL COMMENT 'e.g. utility_bill, late_fee, maintenance_expense',
   source_id   BIGINT UNSIGNED NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_invoice_items_invoice (invoice_id),
   KEY idx_invoice_items_source (source_type, source_id),
@@ -108,8 +112,9 @@ CREATE TABLE IF NOT EXISTS late_fees (
   waived_by      BIGINT UNSIGNED NULL,
   waived_reason  VARCHAR(255) NULL,
   created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_late_fees_invoice (invoice_id),
+  UNIQUE KEY uq_late_fees_invoice_date (invoice_id, date_assessed),
   CONSTRAINT fk_late_fees_invoice FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE RESTRICT,
   CONSTRAINT fk_late_fees_waiver  FOREIGN KEY (waived_by) REFERENCES users (id) ON DELETE SET NULL,
   CONSTRAINT chk_late_fees_status CHECK (status IN ('pending','applied','waived','paid'))

@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS property_types (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name        VARCHAR(50)  NOT NULL,
   description VARCHAR(255) NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_property_types_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -11,6 +13,8 @@ CREATE TABLE IF NOT EXISTS unit_types (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name        VARCHAR(50)  NOT NULL,
   description VARCHAR(255) NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_unit_types_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -19,6 +23,8 @@ CREATE TABLE IF NOT EXISTS amenities (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name        VARCHAR(100) NOT NULL,
   description VARCHAR(255) NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_amenities_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -83,6 +89,7 @@ CREATE TABLE IF NOT EXISTS units (
 CREATE TABLE IF NOT EXISTS property_amenities (
   property_id BIGINT UNSIGNED NOT NULL,
   amenity_id  BIGINT UNSIGNED NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (property_id, amenity_id),
   KEY idx_property_amenities_amenity (amenity_id),
   CONSTRAINT fk_pa_property FOREIGN KEY (property_id) REFERENCES properties (id) ON DELETE CASCADE,
@@ -92,6 +99,7 @@ CREATE TABLE IF NOT EXISTS property_amenities (
 CREATE TABLE IF NOT EXISTS unit_amenities (
   unit_id    BIGINT UNSIGNED NOT NULL,
   amenity_id BIGINT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (unit_id, amenity_id),
   KEY idx_unit_amenities_amenity (amenity_id),
   CONSTRAINT fk_ua_unit    FOREIGN KEY (unit_id) REFERENCES units (id) ON DELETE CASCADE,
@@ -105,6 +113,8 @@ CREATE TABLE IF NOT EXISTS parking_spots (
   number      VARCHAR(20) NOT NULL,
   fee         DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   status      VARCHAR(30) NOT NULL DEFAULT 'available',
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_parking_property_number (property_id, number),
   KEY idx_parking_unit (unit_id),
@@ -115,6 +125,7 @@ CREATE TABLE IF NOT EXISTS parking_spots (
 CREATE TABLE IF NOT EXISTS property_agents (
   property_id BIGINT UNSIGNED NOT NULL,
   agent_id    BIGINT UNSIGNED NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (property_id, agent_id),
   KEY idx_property_agents_agent (agent_id),
   CONSTRAINT fk_pag_property FOREIGN KEY (property_id) REFERENCES properties (id) ON DELETE CASCADE,
@@ -128,6 +139,7 @@ CREATE TABLE IF NOT EXISTS property_assignments (
   assignment_role VARCHAR(30) NOT NULL DEFAULT 'property_manager',
   assigned_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   unassigned_at   TIMESTAMP NULL,
+  updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_assignments_property (property_id),
   KEY idx_assignments_user (user_id),

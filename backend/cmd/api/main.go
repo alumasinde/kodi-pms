@@ -18,6 +18,7 @@ import (
 	"kodipms/internal/platform/logger"
 	"kodipms/internal/platform/mailer"
 	"kodipms/internal/platform/pii"
+	"kodipms/internal/properties"
 	"kodipms/internal/rbac"
 	"kodipms/internal/routes"
 	"kodipms/internal/settings"
@@ -63,6 +64,7 @@ func main() {
 	tokens := auth.NewTokenService(cfg)
 	authSvc := auth.NewService(cfg, db, tokens, loader, auditLog, store, mail, log)
 	settingsSvc := settings.NewService(db, store, auditLog, log)
+	propertiesSvc := properties.NewService(db, store, auditLog, log)
 
 	piiCipher, err := pii.New(cfg.PIIEncryptionKey)
 	if err != nil {
@@ -72,15 +74,16 @@ func main() {
 	piiAccess := pii.NewAccessLog(db, log)
 
 	handler := routes.New(routes.Deps{
-		Config:          cfg,
-		Logger:          log,
-		DB:              db,
-		Store:           store,
-		AuthHandler:     auth.NewHandler(authSvc, cfg),
-		Authenticator:   auth.NewAuthenticator(tokens, loader, store, log),
-		SettingsHandler: settings.NewHandler(settingsSvc, cfg),
-		PII:             piiCipher,
-		PIIAccess:       piiAccess,
+		Config:            cfg,
+		Logger:            log,
+		DB:                db,
+		Store:             store,
+		AuthHandler:       auth.NewHandler(authSvc, cfg),
+		Authenticator:     auth.NewAuthenticator(tokens, loader, store, log),
+		SettingsHandler:   settings.NewHandler(settingsSvc, cfg),
+		PropertiesHandler: properties.NewHandler(propertiesSvc, cfg),
+		PII:               piiCipher,
+		PIIAccess:         piiAccess,
 	})
 
 	srv := &http.Server{

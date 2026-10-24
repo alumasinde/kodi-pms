@@ -91,6 +91,28 @@ field. The effective list is cached for 10 minutes under `settings:org:{orgID}`
 and invalidated on write; an organization profile change also invalidates the
 `domain:{host}` resolution cache.
 
+### Properties endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/properties` | access + `properties.view` | paginated list narrowed to the caller's property scope; filters `q` (name/code/address/estate/town), `status`, `type_id`, `owner_id`, `county`; `sort` accepts name, code, status, county, created_at, updated_at, units_total with a `-` prefix for descending |
+| `GET /api/v1/properties/lookups` | access + `properties.view` | property types and amenities for form dropdowns |
+| `GET /api/v1/properties/{id}` | access + `properties.view` | property with owner, type, unit counts and amenities |
+| `POST /api/v1/properties` | access + `properties.create` | creates a property and its amenities |
+| `PATCH /api/v1/properties/{id}` | access + `properties.update` | partial update; the owner is immutable |
+| `DELETE /api/v1/properties/{id}` | access + `properties.delete` | soft delete, refused while non-deleted units exist |
+
+Properties are looked up inside the resolved organization and the caller's scope;
+an id outside either is a 404, not a 403. `code` is optional but unique per
+organization, including soft-deleted properties, so a code stays reserved after
+deletion. `owner_id` and `type_id` must exist. Amenities are replaced wholesale
+when `amenity_ids` is sent (send `[]` to clear, omit it to keep them). On
+`PATCH`, omit a field to leave it unchanged, send `""` to clear an optional
+string, and send `null` to clear `latitude`, `longitude` or `year_built`.
+Latitude and longitude must end up either both set or both cleared. Lookup lists are
+cached for 1 hour under `lookup:property_types` and `lookup:amenities`. Writes
+are audited as `properties.created`, `properties.updated` and
+`properties.deleted`.
+
 ## Migration order
 | #  | File                           | Tables |
 |----|--------------------------------|--------|

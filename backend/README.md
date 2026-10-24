@@ -256,6 +256,110 @@ it. Writes are audited as `leases.created`, `leases.updated`, `leases.deleted`,
 `leases.tenants_updated`; the sweep is logged, not audited, because it has no
 requesting user.
 
+### Billing endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/invoices` | access + `invoices.view` | paginated; filters `q` (invoice number, lease, unit, tenant), `status`, `invoice_type`, `lease_id`, `property_id`, `unit_id`, `tenant_id`, `overdue`, `due_from`, `due_to`; `sort` accepts number, period, issue_date, due_date, total, paid, balance, status, type, lease, unit, property, created_at, updated_at |
+| `GET /api/v1/invoices/{id}` | access + `invoices.view` | invoice with lines, allocations and late fees |
+| `GET /api/v1/invoices/{id}/ledger` | access + `invoices.view` | the journal that backs this invoice |
+| `POST /api/v1/invoices` | access + `invoices.create` | `lease_id` + at least one line; `issue: true` posts it straight out of draft |
+| `PATCH /api/v1/invoices/{id}` | access + `invoices.update` | draft only; `items` replaces the whole line set and re-prices the invoice |
+| `DELETE /api/v1/invoices/{id}` | access + `invoices.delete` | deletes an unpaid draft; anything with money against it 409s |
+| `POST /api/v1/invoices/{id}/issue` | access + `invoices.update` | body optional; `issue_date` / `due_date` overrides; writes the issue journal |
+| `POST /api/v1/invoices/{id}/void` | access + `invoices.update` | body optional `reason`; mirrors the issue journal and waives open late fees |
+| `POST /api/v1/invoices/{id}/late-fee` | access + `invoices.update` | body optional; `amount` overrides the settings formula, else `fixed` or `percent` of rent |
+| `POST /api/v1/invoices/{id}/apply-credit` | access + `payments.reconcile` | body optional `amount`; spends the lease's unallocated payments on this invoice |
+| `POST /api/v1/late-fees/{id}/waive` | access + `invoices.update` | `reason` required; takes the fee back off the invoice and the ledger |
+| `GET /api/v1/payments` | access + `payments.view` | filters `q`, `status`, `lease_id`, `property_id`, `method_id`, `from`, `to`; `sort` accepts paid_at, amount, reference, status, method, lease, created_at |
+| `GET /api/v1/payments/{id}` | access + `payments.view` | payment with its allocations and reversal |
+| `POST /api/v1/payments` | access + `payments.create` | `lease_id`, `payment_method_id`, `amount`; `allocations` optional, else oldest-first |
+| `POST /api/v1/payments/{id}/reverse` | access + `payments.reverse` | `reason` required; a reversal is always the whole payment |
+| `GET /api/v1/leases/{id}/credit` | access + `payments.view` | the credit entries a lease has, newest first |
+| `GET /api/v1/credit-notes` | access + `invoices.view` | filters `q`, `status`, `lease_id`, `invoice_id`, `property_id` |
+| `GET /api/v1/credit-notes/{id}` | access + `invoices.view` | note with the journal it posted |
+| `POST /api/v1/credit-notes` | access + `invoices.create` | creates a **draft**; `lease_id` and `amount` required |
+| `PATCH /api/v1/credit-notes/{id}` | access + `invoices.update` | draft only; `invoice_id` stops being writable once the note is issued |
+| `DELETE /api/v1/credit-notes/{id}` | access + `invoices.delete` | draft notes only |
+| `POST /api/v1/credit-notes/{id}/issue` | access + `invoices.update` | body optional `invoice_id`; freezes lease, invoice, amount and date |
+| `POST /api/v1/credit-notes/{id}/apply` | access + `invoices.update` | reduces the invoice and posts the note |
+| `POST /api/v1/credit-notes/{id}/void` | access + `invoices.update` | body optional `reason`; only an issued note can be voided, a draft is deleted |
+| `GET /api/v1/payment-methods` | access + `payments.view` | reference list, `is_active` included |
+| `GET /api/v1/ledger/entries` | access + `invoices.view` | filters `account`, `source_type`, `source_id`, `lease_id`, `property_id`, `from`, `to` |
+| `GET /api/v1/ledger/accounts` | access + `invoices.view` | the chart of accounts |
+| `GET /api/v1/billing/summary` | access + `invoices.view` | billed / collected / outstanding / overdue / credit plus invoice counts, in the organization's own date |
+
+**Money is never a writable field.** `invoices.amount_paid` is a trigger-derived
+column and `balance` is generated from it, so no request can invent a payment;
+`status` moves only through issue, void, apply and the sweep. A client sends a
+line's `quantity`, `unit_price` and `tax_rate` and the server computes the amount,
+the subtotal, the tax and the total — an `amount` in the body is rejected by the
+strict decoder. Lines are capped at 60 per invoice, `tax_rate` at 100, and every
+figure at 9999999999.99.
+
+**Every movement of money is a balanced journal.** One transaction writes the
+rows and the entries: issue (AR debit against rent/utility/service income,
+deposit lines to the deposit liability), payment (cash debit against AR, with any
+unallocated remainder to the unallocated-receipts account), reversal (the mirror),
+late fee, credit note and credit application. `PostJournal` refuses an unbalanced
+set before writing anything, and `ledger_entries` is append-only in SQL, so a
+correction is always another entry, never an edit.
+
+**Payments and allocations follow the triggers.** `trg_allocations_validate`
+rejects an allocation whose payment and invoice sit on different leases, points at
+a draft or void invoice, or exceeds the invoice total; `trg_allocations_sync_invoice`
+then recomputes `amount_paid`. So the module never writes `amount_paid` and lets
+the allocation insert fail loudly (409) instead of pre-computing it. `payments`
+reference is unique per method, and a duplicate receipt 409s rather than
+double-counting. A reversal must be the full payment (`trg_payment_reversals_validate`),
+which is why `ReversePayment` takes no amount — a partial refund is a credit note.
+The unspent half of a reversed payment is clawed back with a negative
+`tenant_credit_entries` row of type `reversal`; tenant credit is always *derived*
+from payments minus live allocations, so it cannot be padded.
+
+**Credit notes stay out of the money the tenant holds.** They reduce the invoice
+they are applied to and post income/AR lines; they never add `invoice_items` and
+never write a credit entry, because credit comes from overpaid money.
+`trg_credit_notes_issued_immutable` freezes `lease_id`, `invoice_id`, `amount` and
+`issue_date` the moment a note leaves draft, and `applied`/`void` are final — so
+the API only accepts `invoice_id` while drafting, or in the same call that issues
+the note.
+
+**Automation, in the organization's own day.** An hourly sweep (started next to
+the lease purge in `cmd/api/main.go`) does three things per organization, using
+`organizations.timezone` for "today": it raises missing rent periods, marks unpaid
+invoices `overdue`, and assesses the late fee once the grace period has passed.
+A period is raised as a **draft** five days before it starts — so a meter reading
+or a service charge can still be attached — and issued on the day it begins, which
+is when the journal is written. Rent is billed gross (residential rent is not a
+VAT supply); the security deposit rides on the first rent invoice while the
+`pending` deposit record still is pending, and a fully-paid invoice holding a
+deposit line flips that deposit to `held` exactly once.
+
+The sweep is safe to run everywhere and to re-run: `uq_invoices_lease_period`
+(lease, type, period start) and `uq_late_fees_invoice_date` make a duplicate a
+no-op, the issuing statement is guarded on `status = 'draft' AND amount_paid = 0`
+so a second instance posts no second journal, each lease is its own transaction,
+and a lease with nothing to bill returns `errNothingToBill` and is logged at debug.
+Backlog is capped at three periods per run so a month of downtime cannot flood the
+ledger, and rent periods clamp to day 28 to match `chk_leases_billing_day` and
+`chk_leases_due_day`. Sweep writes are logged, not audited — there is no
+requesting user.
+
+**Scope is enforced in SQL, not in the response.** Every query carries
+`organization_id`, and `scopeFilter` narrows by the caller's assigned properties —
+or, for a tenant, to leases their own tenant record sits on, with drafts hidden
+entirely (`hideDrafts`), `status=draft` refused as a filter and `PATCH` on a
+foreign invoice returning 404 rather than 403. Ledger, credit-note and payment
+reads all take the same scope. Reads need `invoices.view`/`payments.view`; a
+tenant role has both and therefore sees only its own money.
+
+Audited as `invoices.created`, `invoices.updated`, `invoices.deleted`,
+`invoices.issued`, `invoices.voided`, `invoices.late_fee_assessed`,
+`late_fees.waived`, `payments.credit_applied`, `payments.recorded`,
+`payments.reversed`, `credit_notes.created`, `credit_notes.updated`,
+`credit_notes.issued`, `credit_notes.applied`, `credit_notes.voided` and
+`credit_notes.deleted`, each with the before/after values the request changed.
+
 ## Migration order
 | #  | File                           | Tables |
 |----|--------------------------------|--------|
@@ -272,7 +376,10 @@ requesting user.
 | 11 | seed_reference_data            | seed: property/unit types, amenities, payment methods |
 
 ## Rules that keep this safe
-1. **Never edit a migration that has run anywhere.** Add a new numbered pair instead (e.g. `000019_add_x.up.sql`).
+1. **The chain is consolidated into `000001`–`000011` and nothing is deployed yet.** Put a schema
+   fix in the base pair that owns the table (keep `CREATE TABLE IF NOT EXISTS` / `DROP TABLE IF
+   EXISTS` and each trigger create/drop symmetric) instead of appending `000012+`. Once the schema
+   has reached a real environment, switch to additive numbered pairs and never edit a pair that ran.
 2. Table `up`s use `CREATE TABLE IF NOT EXISTS`, table `down`s use `DROP TABLE IF EXISTS`, and seeds use `INSERT IGNORE`, so a half-finished run can be retried. Triggers are the exception: MySQL has no `CREATE TRIGGER IF NOT EXISTS`, so a retry after a partial trigger failure needs the leftover triggers dropped by hand.
 3. MySQL DDL auto-commits (no transactional rollback). If a migration fails midway the DB is marked *dirty*: fix the schema, then `go run ./migrate force <last good version>` and re-run.
 4. `down` drops tables in strict reverse-dependency order, so no `FOREIGN_KEY_CHECKS=0` is needed. Seed `down`s only delete rows nothing references.

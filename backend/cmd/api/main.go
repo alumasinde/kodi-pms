@@ -12,6 +12,7 @@ import (
 
 	"kodipms/internal/audit"
 	"kodipms/internal/auth"
+	"kodipms/internal/billing"
 	"kodipms/internal/leases"
 	"kodipms/internal/platform/cache"
 	"kodipms/internal/platform/config"
@@ -79,6 +80,7 @@ func main() {
 	unitsSvc := units.NewService(db, store, auditLog, log)
 	usersSvc := users.NewService(db, store, auditLog, piiCipher, log)
 	leasesSvc := leases.NewService(db, auditLog, log)
+	billingSvc := billing.NewService(db, auditLog, log)
 
 	handler := routes.New(routes.Deps{
 		Config:            cfg,
@@ -92,6 +94,7 @@ func main() {
 		UnitsHandler:      units.NewHandler(unitsSvc, cfg),
 		UsersHandler:      users.NewHandler(usersSvc, cfg),
 		LeasesHandler:     leases.NewHandler(leasesSvc, cfg),
+		BillingHandler:    billing.NewHandler(billingSvc, cfg),
 		PII:               piiCipher,
 		PIIAccess:         piiAccess,
 	})
@@ -110,6 +113,7 @@ func main() {
 
 	authSvc.StartTokenCleanup(sigCtx)
 	leasesSvc.StartExpirySweep(sigCtx)
+	billingSvc.StartBillingSweep(sigCtx)
 
 	go func() {
 		log.Info("api listening", "addr", cfg.HTTPAddr, "env", cfg.Env)

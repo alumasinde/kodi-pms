@@ -10,6 +10,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"kodipms/internal/auth"
+	"kodipms/internal/billing"
 	"kodipms/internal/leases"
 	"kodipms/internal/platform/cache"
 	"kodipms/internal/platform/config"
@@ -36,6 +37,7 @@ type Deps struct {
 	UnitsHandler      *units.Handler
 	UsersHandler      *users.Handler
 	LeasesHandler     *leases.Handler
+	BillingHandler    *billing.Handler
 	PII               *pii.Cipher
 	PIIAccess         *pii.AccessLog
 }
@@ -85,6 +87,7 @@ func New(deps Deps) http.Handler {
 			deps.UnitsHandler.Routes(pr)
 			deps.UsersHandler.Routes(pr)
 			deps.LeasesHandler.Routes(pr)
+			deps.BillingHandler.Routes(pr)
 		})
 	})
 

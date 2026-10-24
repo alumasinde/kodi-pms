@@ -2,9 +2,9 @@
 // and records reads of those fields.
 //
 // Ciphertext layout: version byte (0x01) || 12-byte nonce || GCM ciphertext.
-// Store the returned bytes in the * VARBINARY columns created by migration
-// 000017. Hash is a keyed HMAC-SHA256 of the normalised value, suitable for
-// duplicate detection in national_id_hash without decrypting.
+// Store the returned bytes in the * VARBINARY columns created by migrations
+// 000002 and 000009. Hash is a keyed HMAC-SHA256 of the normalised value,
+// suitable for duplicate detection in national_id_hash without decrypting.
 package pii
 
 import (

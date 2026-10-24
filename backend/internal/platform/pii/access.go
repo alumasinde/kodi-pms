@@ -22,7 +22,7 @@ type AccessEntry struct {
 	UserAgent      string
 }
 
-// AccessLog writes to pii_access_logs, which migration 000017 makes
+// AccessLog writes to pii_access_logs, which migration 000010 makes
 // append-only. Failures are logged but do not block the read that triggered
 // them; callers that require a hard audit gate should check the error.
 type AccessLog struct {

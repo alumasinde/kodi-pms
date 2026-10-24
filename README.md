@@ -1,6 +1,6 @@
 # Property Management System - Code Guide (Kenya)
 
-Backend implementation guide for the rental / property management platform: Go + MySQL 8 + Redis, built on the schema in `db/migrations` (migrations 000001-000018).
+Backend implementation guide for the rental / property management platform: Go + MySQL 8 + Redis, built on the schema in `db/migrations` (migrations 000001-000011).
 Each module section gives: **purpose, endpoints, who can do what, what it queries, what it returns, Redis usage, code skeleton, and automations.**
 
 > The code is a pattern to copy, not a framework lock-in. Examples use `net/http` + `chi`, `sqlx`, `go-redis/v9`, `shopspring/decimal`. Swap freely, but keep the layering and the rules in section 1.
@@ -468,7 +468,7 @@ owner `payout_*_enc` columns. `national_id_hash` supports duplicate detection
 without decryption. Do not add plaintext values to logs, audit payloads or
 exports; `pii_access_logs` is the record of who read them.
 
-### 4.6 Schema guarantees added in 000013-000018
+### 4.6 Schema guarantees built into the base migrations
 - Users are unique per organization while live; login/reset/invite lookups are
   host-org scoped. Units carry `organization_id`, and lease/billing/deposit/
   document/insurance/review children use composite `(organization_id, id)` FKs;
@@ -479,8 +479,8 @@ exports; `pii_access_logs` is the record of who read them.
   payments cannot be deleted or moved between orgs/leases (reverse the payment
   instead). `ledger_entries`, `tenant_credit_entries` and `pii_access_logs`
   reject UPDATE/DELETE.
-- Owner statements/commissions/disbursements and per-org M-Pesa shortcodes and
-  account references are modelled in 000015-000016.
+- Owner statements/commissions/disbursements are created in 000006, and per-org
+  M-Pesa shortcodes and account references in 000007.
 - PII is AES-256-GCM ciphertext; retention policies and the append-only access
-  log live in 000017. All timestamps are DATETIME (2038-safe) and the API purges
+  log live in 000010. All timestamps are DATETIME (2038-safe) and the API purges
   expired refresh/one-time tokens hourly.

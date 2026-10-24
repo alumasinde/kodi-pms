@@ -27,8 +27,9 @@ Demo login: `demo@kodipms.co.ke` / `Demo@2026!`, on the `localhost` domain.
 Quick PIN for the demo admin: `2026` (password login on the device first).
 Apply it only to a dedicated demo database; it uses ids in the 9000 range, and
 the seed aborts unless `@demo_seed_confirmed` is set. The seed is written for
-the 000013-000018 schema (per-org columns, M-Pesa routing, no plaintext PII) and
-should be applied to a freshly migrated database.
+the consolidated 000001-000011 schema (per-org columns, ledger and owner money,
+M-Pesa routing, no plaintext PII) and should be applied to a freshly migrated
+database.
 
 ## Running the API
     cp .env.example .env        # set DATABASE_URL, a real JWT_SECRET and PII_ENCRYPTION_KEY
@@ -77,34 +78,27 @@ password and PIN failures increment the same DB-backed account lock (5 failures,
 | #  | File                           | Tables |
 |----|--------------------------------|--------|
 | 01 | core_administration            | organizations, organization_domains, system_settings |
-| 02 | identity_access                | users, roles, permissions, role_permissions, user_roles, refresh_tokens, user_tokens, owners, agents, tenants |
+| 02 | identity_access                | users, roles, permissions, role_permissions, user_roles, refresh_tokens, user_tokens, owners, agents, tenants (PII ciphertext, lockout, rotation, per-org uniqueness) |
 | 03 | seed_roles_and_settings        | seed: roles, permissions, default role matrix, default settings (KES, late fees...) |
 | 04 | property_and_asset_management  | property_types, unit_types, amenities, properties, units, property_amenities, unit_amenities, parking_spots, property_agents, property_assignments |
-| 05 | lease_and_tenant_placement     | leases, lease_tenants, deposits, deposit_refunds, documents, insurance_policies |
-| 06 | billing_ledger_and_payments    | payment_methods, invoices, invoice_items, payments, payment_allocations, late_fees |
-| 07 | mpesa_integration              | mpesa_transactions, mpesa_stk_requests |
+| 05 | lease_and_tenant_placement     | leases, lease_tenants, deposits, deposit_refunds, documents, insurance_policies (one active lease per unit) |
+| 06 | billing_ledger_and_payments    | payment_methods, invoices, invoice_items, payments, payment_allocations, late_fees, ledger_accounts, ledger_entries, credit_notes, tenant_credit_entries, payment_reversals, owner_statements, owner_statement_lines, owner_commissions, owner_disbursements + billing triggers |
+| 07 | mpesa_integration              | mpesa_shortcodes, mpesa_account_refs, mpesa_transactions, mpesa_stk_requests |
 | 08 | utilities_and_consumption      | utility_meters, utility_readings, utility_bills |
 | 09 | maintenance_and_inspections    | contractors, maintenance_requests, maintenance_jobs, maintenance_expenses, maintenance_logs, inspections, inspection_items |
-| 10 | communications_and_audit       | notifications, messages, reviews, audit_logs |
+| 10 | communications_and_audit       | notifications, messages, reviews, audit_logs, pii_retention_policies, pii_access_logs |
 | 11 | seed_reference_data            | seed: property/unit types, amenities, payment methods |
-| 12 | security_hardening             | users.token_version, DB login lock fields, refresh rotation/grace fields |
-| 13 | tenancy_and_lease_integrity    | per-org user uniqueness, units.organization_id, composite org FKs, one active lease per unit, billing day checks |
-| 14 | billing_ledger                 | ledger_accounts, ledger_entries, credit_notes, tenant_credit_entries, payment_reversals, allocation triggers, derived invoices.amount_paid |
-| 15 | owner_money                    | owner_statements, owner_statement_lines, owner_commissions, owner_disbursements |
-| 16 | mpesa_routing                  | mpesa_shortcodes, mpesa_account_refs, shortcode/lease links on M-Pesa rows |
-| 17 | pii_and_retention              | encrypted national ID/KRA PIN/income/payout columns, national_id_hash, pii_retention_policies, pii_access_logs |
-| 18 | datetime_housekeeping          | all TIMESTAMP columns become DATETIME (2038-safe) |
 
 ## Rules that keep this safe
 1. **Never edit a migration that has run anywhere.** Add a new numbered pair instead (e.g. `000019_add_x.up.sql`).
-2. Table `up`s use `CREATE TABLE IF NOT EXISTS`, table `down`s use `DROP TABLE IF EXISTS`, and seeds use `INSERT IGNORE`, so a half-finished run can be retried. `ALTER TABLE` migrations (e.g. 000013+) are the exception: MySQL 8 has no `ADD COLUMN IF NOT EXISTS`, so retrying a partially-applied one needs `force` after fixing the schema by hand.
+2. Table `up`s use `CREATE TABLE IF NOT EXISTS`, table `down`s use `DROP TABLE IF EXISTS`, and seeds use `INSERT IGNORE`, so a half-finished run can be retried. Triggers are the exception: MySQL has no `CREATE TRIGGER IF NOT EXISTS`, so a retry after a partial trigger failure needs the leftover triggers dropped by hand.
 3. MySQL DDL auto-commits (no transactional rollback). If a migration fails midway the DB is marked *dirty*: fix the schema, then `go run ./migrate force <last good version>` and re-run.
 4. `down` drops tables in strict reverse-dependency order, so no `FOREIGN_KEY_CHECKS=0` is needed. Seed `down`s only delete rows nothing references.
 5. `down` defaults to ONE step. `down -all` needs `-yes`; with `APP_ENV=production`, `down`, `goto` and `force` all need `-yes`.
-6. Rolling back a table migration deletes that table's data. Back up first in production. **000017 drops the old plaintext PII columns**: back up before applying it if those values cannot be re-entered.
+6. Rolling back a table migration deletes that table's data. Back up first in production.
 7. golang-migrate takes a MySQL advisory lock, so two app instances running `up` at once won't collide.
 8. `audit_logs`, `ledger_entries`, `tenant_credit_entries` and `pii_access_logs` are append-only (triggers reject UPDATE/DELETE). Grant the app DB user only INSERT/SELECT on them, and use a separate migration user for DDL.
-9. 000013+ require MySQL 8.0.16+ (CHECK constraints) and generated columns. Rolling 000013 back fails if the data now has duplicate emails/phones per org or two active leases on one unit; clean those rows first.
+9. The chain targets MySQL 8.0.16+ (CHECK constraints, generated columns, `SIGNAL`). `users` is unique per organization while live and a unit can hold only one active lease, so importing legacy rows with duplicates fails at insert time — clean the data before loading it.
 
 ## Design notes vs. the files you shared
 - Added `organization_id` (multi-tenancy) to top-level tables; child tables inherit it via their parent.
@@ -115,7 +109,7 @@ password and PIN failures increment the same DB-backed account lock (5 failures,
 - `invoices` is unique on `(lease_id, invoice_type, billing_period_start)`, so a monthly billing job can safely re-run.
 - Status columns are VARCHAR + CHECK (no ENUM); CHECKs need MySQL 8.0.16+.
 
-## What migrations 000013-000018 enforce
+## What the schema enforces
 - **Identity is per organization.** `users` is unique on `(organization_id, email)` and
   `(organization_id, phone)` while the user is live; soft-deleting releases both.
   Login, PIN login, password reset and invites all look users up inside the resolved

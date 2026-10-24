@@ -12,6 +12,7 @@ import (
 	"kodipms/internal/auth"
 	"kodipms/internal/billing"
 	"kodipms/internal/leases"
+	"kodipms/internal/mpesa"
 	"kodipms/internal/platform/cache"
 	"kodipms/internal/platform/config"
 	"kodipms/internal/platform/httpx"
@@ -23,6 +24,7 @@ import (
 	"kodipms/internal/tenancy"
 	"kodipms/internal/units"
 	"kodipms/internal/users"
+	"kodipms/internal/utilities"
 )
 
 type Deps struct {
@@ -38,6 +40,8 @@ type Deps struct {
 	UsersHandler      *users.Handler
 	LeasesHandler     *leases.Handler
 	BillingHandler    *billing.Handler
+	UtilitiesHandler  *utilities.Handler
+	MpesaHandler      *mpesa.Handler
 	PII               *pii.Cipher
 	PIIAccess         *pii.AccessLog
 }
@@ -45,6 +49,7 @@ type Deps struct {
 func New(deps Deps) http.Handler {
 	tenancyMW := tenancy.NewMiddleware(tenancy.NewResolver(deps.DB, deps.Store, deps.Logger), deps.Config.TrustProxy)
 	userRateLimit := middleware.RateLimitUser(deps.Store, deps.Config.RateLimitUser, time.Minute)
+	ipRateLimit := middleware.RateLimitIP(deps.Store, deps.Config.RateLimitIP, time.Minute, deps.Config.TrustProxy)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -66,7 +71,7 @@ func New(deps Deps) http.Handler {
 	})
 
 	r.Route("/api/v1", func(api chi.Router) {
-		api.Use(middleware.RateLimitIP(deps.Store, deps.Config.RateLimitIP, time.Minute, deps.Config.TrustProxy))
+		api.Use(ipRateLimit)
 		api.Use(tenancyMW.Resolve)
 
 		api.Route("/auth", func(ar chi.Router) {
@@ -88,7 +93,19 @@ func New(deps Deps) http.Handler {
 			deps.UsersHandler.Routes(pr)
 			deps.LeasesHandler.Routes(pr)
 			deps.BillingHandler.Routes(pr)
+			deps.UtilitiesHandler.Routes(pr)
+			deps.MpesaHandler.Routes(pr)
 		})
+	})
+
+	// Safaricom's callbacks, on the root router. A webhook carries no host that
+	// resolves an organization and no bearer token, so it cannot pass the tenancy
+	// resolver or the auth middleware; it is authenticated by the token in its own
+	// path. It is still IP-limited, because a URL that needs no credential is a URL
+	// somebody will probe.
+	r.Group(func(wh chi.Router) {
+		wh.Use(ipRateLimit)
+		deps.MpesaHandler.WebhookRoutes(wh)
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

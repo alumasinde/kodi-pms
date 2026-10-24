@@ -14,6 +14,11 @@
 --                              the device first, then the refresh cookie)
 -- Domains:     localhost  and  127.0.0.1
 --
+-- A second organization is seeded so multi-tenancy is visible in the data, not
+-- only in the code: log in as demo2@kodipms.co.ke (same password) on
+-- demo2.localhost and the whole API answers with organization 9002's rows only.
+-- It has its own property, lease, invoice, paybill and M-Pesa queue.
+--
 -- The script is idempotent: rows use ids in the 9000 range and are inserted
 -- with INSERT IGNORE (allocations are guarded with NOT EXISTS because the
 -- allocation triggers run before duplicate-key checks). Re-running it will not
@@ -39,9 +44,12 @@ SET @lease1_start = DATE_SUB(@period_start, INTERVAL 10 MONTH);
 SET @lease1_end   = DATE_SUB(DATE_ADD(@lease1_start, INTERVAL 1 YEAR), INTERVAL 1 DAY);
 SET @lease2_start = DATE_SUB(@period_start, INTERVAL 4 MONTH);
 SET @lease2_end   = DATE_SUB(DATE_ADD(@lease2_start, INTERVAL 1 YEAR), INTERVAL 1 DAY);
+SET @lease3_start = DATE_SUB(@period_start, INTERVAL 6 MONTH);
+SET @lease3_end   = DATE_SUB(DATE_ADD(@lease3_start, INTERVAL 1 YEAR), INTERVAL 1 DAY);
 
 SET @payment1_at  = DATE_ADD(DATE_ADD(@period_start, INTERVAL 1 DAY), INTERVAL 9 HOUR);
 SET @payment2_at  = DATE_ADD(DATE_ADD(@period_start, INTERVAL 3 DAY), INTERVAL 14 HOUR);
+SET @payment3_at  = DATE_ADD(DATE_ADD(@period_start, INTERVAL 2 DAY), INTERVAL 18 HOUR);
 SET @unmatched_at = DATE_ADD(DATE_ADD(@period_start, INTERVAL 6 DAY), INTERVAL 11 HOUR);
 
 SET @mpesa_paybill = (SELECT id FROM payment_methods WHERE code = 'mpesa_paybill' LIMIT 1);
@@ -208,6 +216,18 @@ INSERT IGNORE INTO payment_allocations (id, organization_id, payment_id, invoice
 SELECT 9002, 9001, 9002, 9002, 20000.00 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM payment_allocations WHERE id = 9002);
 
+-- M-Pesa routing for organization 9001. The credential columns stay NULL on
+-- purpose: they hold AES-256-GCM ciphertext produced by this installation's own
+-- Daraja app, which a portable seed cannot know. A shortcode without credentials
+-- can receive webhooks but cannot push, and the module must fail closed there.
+--
+-- Receipt 9001 is deliberately referenced by BOTH the C2B transaction and the
+-- STK request (per-channel uniqueness allows it, UNIQUE (organization_id,
+-- payment_id) does not span channels). The rule that keeps that from becoming
+-- two payments: the C2B confirmation owns the money row, because it is the
+-- receipt Safaricom sent for value actually received; an STK request is the
+-- prompt that produced it and never books a payment of its own if a
+-- confirmation for the same receipt already exists.
 INSERT IGNORE INTO mpesa_shortcodes
   (id, organization_id, shortcode, account_type, environment, is_active)
 VALUES
@@ -287,5 +307,141 @@ VALUES
   (9001, 9001, 9001, 'in_app', 'demo_welcome', 'Welcome to the Kodi PMS demo',
    'This workspace contains a live portfolio, leases, invoices, payments and maintenance data.',
    '{"demo":true}', 'read', NOW(), NOW());
+
+-- ---------------------------------------------------------------------------
+-- Organization 9002 -- a second, unrelated property manager.
+--
+-- Everything above belongs to organization 9001. This block exists so
+-- per-organization routing and isolation are demonstrated by data: opening the
+-- demo on demo2.localhost resolves 9002, and no row below can be reached from
+-- 9001's API calls (or the other way round) because every composite foreign key
+-- and every query filter carries organization_id. It also gives the M-Pesa
+-- module a second paybill to route against, which is the only way to show that
+-- a callback picks an organization by shortcode rather than by Host header.
+-- It reuses the reference data (payment methods, roles, unit and property
+-- types) that migrations seed, since those tables are deliberately global.
+-- ---------------------------------------------------------------------------
+INSERT IGNORE INTO organizations
+  (id, org_name, slug, legal_name, kra_pin, email, phone, org_address, county, country_code, currency_code, timezone, org_status)
+VALUES
+  (9002, 'Rift Valley Rentals', 'rift-valley-demo', 'Rift Valley Rentals Ltd', 'P059876543Y',
+   'hello@riftvalley.test', '+254700000100', 'Nakuru CBD', 'Nakuru', 'KE', 'KES', 'Africa/Nairobi', 'active');
+
+-- demo2.localhost resolves to loopback like localhost does, so both demos run on
+-- one API process.
+INSERT IGNORE INTO organization_domains (id, organization_id, domain, is_primary, verified_at)
+VALUES (9003, 9002, 'demo2.localhost', 1, NOW());
+
+INSERT IGNORE INTO users
+  (id, organization_id, email, phone, password_hash, pin_hash, must_change_password, first_name, last_name, status, email_verified_at, phone_verified_at)
+VALUES
+  (9005, 9002, 'demo2@kodipms.co.ke', '+254700000101',
+   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', NULL, 0,
+   'Cynthia', 'Chepkoech', 'active', NOW(), NOW()),
+  (9006, 9002, 'grace.chelangat@example.test', '+254700000102',
+   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', NULL, 0,
+   'Grace', 'Chelangat', 'inactive', NOW(), NOW());
+
+INSERT IGNORE INTO user_roles (user_id, role_id)
+SELECT 9005, id FROM roles WHERE name = 'org_admin' AND organization_id IS NULL;
+
+INSERT IGNORE INTO user_roles (user_id, role_id)
+SELECT 9006, id FROM roles WHERE name = 'tenant' AND organization_id IS NULL;
+
+INSERT IGNORE INTO owners
+  (id, organization_id, user_id, company, management_fee_percent, payout_method)
+VALUES
+  (9002, 9002, 9005, 'Rift Valley Rentals Ltd', 10.00, 'mpesa');
+
+INSERT IGNORE INTO tenants
+  (id, organization_id, user_id, emergency_contact, emergency_phone, employment, employer_name)
+VALUES
+  (9003, 9002, 9006, 'Sarah Chelangat', '+254711000102', 'Employed', 'Baringo Farmers Coop');
+
+INSERT IGNORE INTO properties
+  (id, organization_id, owner_id, type_id, name, code, address, estate, town, county, postal_code, country_code, status, notes)
+VALUES
+  (9002, 9002, 9002, @pt_apartment, 'Nakuru Gardens', 'RV-002', 'Kenyatta Avenue, Nakuru',
+   'Nakuru CBD', 'Nakuru', 'Nakuru', '20100', 'KE', 'active',
+   'Second-organization demo block; never visible from organization 9001.');
+
+INSERT IGNORE INTO units
+  (id, organization_id, property_id, type_id, number, floor, bedrooms, bathrooms, square_feet, rent, status)
+VALUES
+  (9005, 9002, 9002, @ut_1bed, 'B1', 1, 1, 1.0, 60, 28000.00, 'occupied');
+
+INSERT IGNORE INTO leases
+  (id, organization_id, unit_id, lease_number, start_date, end_date, rent_amount, deposit_amount,
+   billing_day, due_day, notice_period_days, status, signed_at, created_by)
+VALUES
+  (9003, 9002, 9005, CONCAT('RV-L-', YEAR(@lease3_start), '-001'), @lease3_start, @lease3_end,
+   28000.00, 56000.00, 1, 5, 30, 'active', DATE_ADD(@lease3_start, INTERVAL 9 HOUR), 9005);
+
+INSERT IGNORE INTO lease_tenants (organization_id, lease_id, tenant_id, role)
+VALUES (9002, 9003, 9003, 'primary');
+
+INSERT IGNORE INTO deposits (id, organization_id, lease_id, amount, date_paid, status)
+VALUES (9003, 9002, 9003, 56000.00, @lease3_start, 'held');
+
+INSERT IGNORE INTO invoices
+  (id, organization_id, lease_id, invoice_number, invoice_type, billing_period_start, billing_period_end,
+   issue_date, due_date, subtotal, tax_total, total, amount_paid, status, notes, created_by)
+VALUES
+  (9003, 9002, 9003, CONCAT('INV-RV-', DATE_FORMAT(@period_start, '%Y%m'), '-001'), 'rent',
+   @period_start, @period_end, @period_start, @due_date, 28500.00, 0.00, 28500.00, 0.00,
+   'paid', 'Monthly rent and garbage.', 9005);
+
+INSERT IGNORE INTO invoice_items
+  (id, organization_id, invoice_id, item_type, description, quantity, unit_price, tax_rate, amount, source_type, source_id)
+VALUES
+  (9008, 9002, 9003, 'rent',    'Monthly rent - B1', 1.000, 28000.00, 0.00, 28000.00, NULL, NULL),
+  (9009, 9002, 9003, 'garbage', 'Garbage collection', 1.000,   500.00, 0.00,   500.00, NULL, NULL);
+
+INSERT IGNORE INTO payments
+  (id, organization_id, lease_id, payment_method_id, amount, paid_at, reference, status, received_by, notes)
+VALUES
+  (9003, 9002, 9003, @mpesa_paybill, 28500.00, @payment3_at, 'RTU2DEMO01', 'completed', 9005,
+   'M-Pesa paybill 400200, booked from the C2B confirmation.');
+
+INSERT IGNORE INTO payment_allocations (id, organization_id, payment_id, invoice_id, amount)
+SELECT 9003, 9002, 9003, 9003, 28500.00 FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM payment_allocations WHERE id = 9003);
+
+-- Its own paybill, in the production environment: a globally unique
+-- (environment, shortcode) means the second organization cannot share 9001's
+-- sandbox code, and a real client would have a production paybill of its own.
+-- No credentials are seeded, so this row can route a confirmation but any STK
+-- push against it must be refused.
+INSERT IGNORE INTO mpesa_shortcodes
+  (id, organization_id, shortcode, account_type, environment, is_active)
+VALUES
+  (9002, 9002, '400200', 'paybill', 'production', 1);
+
+INSERT IGNORE INTO mpesa_account_refs
+  (id, organization_id, shortcode_id, lease_id, account_reference)
+VALUES
+  (9003, 9002, 9002, 9003, 'RV-002-B1');
+
+INSERT IGNORE INTO mpesa_transactions
+  (id, organization_id, trans_id, trans_type, business_short_code, shortcode_id, bill_ref_number, lease_id,
+   msisdn, first_name, amount, trans_time, status, payment_id, raw_payload)
+VALUES
+  (9004, 9002, 'RTU2DEMO01', 'Pay Bill', '400200', 9002, 'RV-002-B1', 9003, '254700000102', 'GRACE',
+   28500.00, @payment3_at, 'matched', 9003,
+   '{"TransID":"RTU2DEMO01","TransAmount":"28500.00","BillRefNumber":"RV-002-B1","MSISDN":"254700000102"}'),
+  (9005, 9002, 'RTU2DEMO02', 'Pay Bill', '400200', 9002, 'RV-002-B9', NULL, '254700000103', 'UNKNOWN',
+   5000.00, @unmatched_at, 'unmatched', NULL,
+   '{"TransID":"RTU2DEMO02","TransAmount":"5000.00","BillRefNumber":"RV-002-B9","MSISDN":"254700000103"}');
+
+-- An STK prompt that is still waiting: it points at the same lease and invoice
+-- whose balance the C2B confirmation above already cleared. The module must not
+-- book a second payment when this callback arrives, because the invoice no
+-- longer has a balance and receipt RTU2DEMO01 is already matched.
+INSERT IGNORE INTO mpesa_stk_requests
+  (id, organization_id, shortcode_id, lease_id, invoice_id, phone, amount, merchant_request_id, checkout_request_id,
+   status, result_code, result_desc, mpesa_receipt, payment_id)
+VALUES
+  (9002, 9002, 9002, 9003, 9003, '+254700000102', 28500.00, 'rvr-merchant-1', 'ws_CO_RVR_9002',
+   'pending', NULL, NULL, NULL, NULL);
 
 COMMIT;

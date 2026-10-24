@@ -53,6 +53,10 @@ INSERT IGNORE INTO permissions (code, description) VALUES
   ('payments.create',                'Record payments'),
   ('payments.reconcile',             'Reconcile unmatched M-Pesa and bank payments'),
   ('payments.reverse',               'Reverse payments'),
+  ('mpesa.view',                     'View M-Pesa shortcodes, receipts and STK requests'),
+  ('mpesa.manage',                   'Configure M-Pesa shortcodes, credentials and account references'),
+  ('mpesa.push',                     'Send M-Pesa STK push prompts'),
+  ('mpesa.reconcile',                'Match or ignore unmatched M-Pesa receipts'),
   ('utilities.view',                 'View meters, readings and utility bills'),
   ('utilities.create',               'Create meters and utility bills'),
   ('utilities.update',               'Update meters and utility bills'),
@@ -102,6 +106,7 @@ WHERE r.name = 'landlord' AND r.organization_id IS NULL
   AND p.code IN (
     'properties.view', 'units.view', 'tenants.view', 'leases.view',
     'invoices.view', 'payments.view', 'utilities.view', 'maintenance.view',
+    'mpesa.view',
     'notifications.view', 'dashboard.view', 'reports.view'
   );
 
@@ -117,6 +122,7 @@ WHERE r.name = 'property_manager' AND r.organization_id IS NULL
     'leases.view', 'leases.create', 'leases.update', 'leases.activate', 'leases.terminate', 'leases.renew',
     'invoices.view', 'invoices.create', 'invoices.update',
     'payments.view', 'payments.create',
+    'mpesa.view', 'mpesa.push',
     'utilities.view', 'utilities.create', 'utilities.update',
     'maintenance.view', 'maintenance.create', 'maintenance.update', 'maintenance.assign', 'maintenance.close',
     'settings.view', 'notifications.view', 'notifications.send',
@@ -155,6 +161,7 @@ WHERE r.name = 'accountant' AND r.organization_id IS NULL
     'properties.view', 'units.view', 'tenants.view', 'leases.view',
     'invoices.view', 'invoices.create', 'invoices.update', 'invoices.delete',
     'payments.view', 'payments.create', 'payments.reconcile', 'payments.reverse',
+    'mpesa.view', 'mpesa.push', 'mpesa.reconcile',
     'utilities.view', 'dashboard.view', 'reports.view'
   );
 

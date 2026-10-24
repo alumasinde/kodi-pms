@@ -121,6 +121,12 @@ func (s *Service) CreateInvoice(ctx context.Context, p *rbac.Principal, in Creat
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkUtilityLines(ctx, tx, p.OrgID, lease.UnitID, 0, items, fields); err != nil {
+		return nil, err
+	}
+	if len(fields) > 0 {
+		return nil, httpx.Validation(fields)
+	}
 	if clash, taken, err := s.repo.PeriodTaken(ctx, tx, p.OrgID, row.LeaseID, row.InvoiceType, row.BillingPeriodStart, 0); err != nil {
 		return nil, err
 	} else if taken {
@@ -161,6 +167,9 @@ func (s *Service) CreateInvoice(ctx context.Context, p *rbac.Principal, in Creat
 		if _, err := s.repo.InsertItem(ctx, tx, &items[i]); err != nil {
 			return nil, err
 		}
+	}
+	if err := s.attachUtilityBills(ctx, tx, p.OrgID, id, items); err != nil {
+		return nil, err
 	}
 	if in.Issue {
 		if err := s.postIssue(ctx, tx, p.OrgID, id, row.LeaseID, items,
@@ -252,6 +261,18 @@ func (s *Service) UpdateInvoice(ctx context.Context, p *rbac.Principal, id uint6
 		return nil, httpx.Conflict(periodAlreadyBilled + " (" + clash + ")")
 	}
 
+	if in.Items != nil {
+		lease, err := s.billingLease(ctx, tx, p, row.LeaseID, false)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.checkUtilityLines(ctx, tx, p.OrgID, lease.UnitID, id, items, fields); err != nil {
+			return nil, err
+		}
+		if len(fields) > 0 {
+			return nil, httpx.Validation(fields)
+		}
+	}
 	if err := s.repo.UpdateInvoice(ctx, tx, row); err != nil {
 		if isTriggerRejection(err) {
 			return nil, s.rejectTrigger(err, "update invoice")
@@ -260,6 +281,9 @@ func (s *Service) UpdateInvoice(ctx context.Context, p *rbac.Principal, id uint6
 	}
 	if in.Items != nil {
 		if err := s.repo.ReplaceItems(ctx, tx, p.OrgID, id, items); err != nil {
+			return nil, err
+		}
+		if err := s.attachUtilityBills(ctx, tx, p.OrgID, id, items); err != nil {
 			return nil, err
 		}
 	}
@@ -353,6 +377,9 @@ func (s *Service) VoidInvoice(ctx context.Context, p *rbac.Principal, id uint64,
 			}
 		}
 		row.Status = statusVoid
+		if err := s.repo.UnlinkUtilityBills(ctx, tx, id); err != nil {
+			return nil, err
+		}
 		return map[string]any{"status": statusVoid, "reason": reason}, nil
 	})
 }
@@ -380,6 +407,11 @@ func (s *Service) DeleteInvoice(ctx context.Context, p *rbac.Principal, id uint6
 	}
 	if row.Status != statusDraft {
 		return httpx.Conflict("Only a draft invoice can be deleted")
+	}
+	// The invoice link is SET NULL by the foreign key when the row goes, so the
+	// bills have to be handed back while the invoice still exists.
+	if err := s.repo.UnlinkUtilityBills(ctx, tx, id); err != nil {
+		return err
 	}
 	affected, err := s.repo.DeleteInvoice(ctx, tx, p.OrgID, id)
 	if err != nil {

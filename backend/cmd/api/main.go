@@ -14,6 +14,7 @@ import (
 	"kodipms/internal/auth"
 	"kodipms/internal/billing"
 	"kodipms/internal/leases"
+	"kodipms/internal/mpesa"
 	"kodipms/internal/platform/cache"
 	"kodipms/internal/platform/config"
 	"kodipms/internal/platform/database"
@@ -26,6 +27,7 @@ import (
 	"kodipms/internal/settings"
 	"kodipms/internal/units"
 	"kodipms/internal/users"
+	"kodipms/internal/utilities"
 )
 
 func main() {
@@ -81,6 +83,9 @@ func main() {
 	usersSvc := users.NewService(db, store, auditLog, piiCipher, log)
 	leasesSvc := leases.NewService(db, auditLog, log)
 	billingSvc := billing.NewService(db, auditLog, log)
+	utilitiesSvc := utilities.NewService(db, auditLog, log)
+	mpesaSvc := mpesa.NewService(db, auditLog, piiCipher, cfg,
+		mpesa.NewDaraja(store, log), routes.NewMpesaPaymentBooker(billingSvc), log)
 
 	handler := routes.New(routes.Deps{
 		Config:            cfg,
@@ -95,6 +100,8 @@ func main() {
 		UsersHandler:      users.NewHandler(usersSvc, cfg),
 		LeasesHandler:     leases.NewHandler(leasesSvc, cfg),
 		BillingHandler:    billing.NewHandler(billingSvc, cfg),
+		UtilitiesHandler:  utilities.NewHandler(utilitiesSvc, cfg),
+		MpesaHandler:      mpesa.NewHandler(mpesaSvc, cfg),
 		PII:               piiCipher,
 		PIIAccess:         piiAccess,
 	})

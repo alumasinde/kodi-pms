@@ -3,8 +3,21 @@
 -- A webhook identifies the organization by shortcode and the lease by the
 -- account reference (BillRefNumber), instead of guessing. Credential columns
 -- hold AES-256-GCM ciphertext produced by internal/platform/pii, never
--- plaintext. callback_token_hash is SHA-256 of the per-shortcode callback
--- token; the raw token is only shown when it is created.
+-- plaintext. callback_token_hash holds the lowercase hex of that package's
+-- keyed HMAC-SHA256 of the per-shortcode callback token (64 characters, and
+-- the package exposes no plain SHA-256); it is what a callback is matched
+-- against, indexed, and unreadable back into a token. callback_token_enc holds
+-- the same token sealed with the same key, because an STK push has to send
+-- Safaricom a callback URL it can no longer recompute: without it, pushing
+-- would be impossible or would mean showing the token on every screen forever.
+-- A reader who holds the PII key can therefore mint a webhook URL -- and that
+-- same reader already holds the consumer secrets in these rows. The raw token is
+-- only ever shown in the create and rotate responses.
+-- Shortcodes stay unique across organizations on purpose -- a callback
+-- arrives with a shortcode and nothing else, so two organizations sharing one
+-- code could not be told apart. In Daraja sandbox every test account is handed
+-- the same paybill, so only one organization can hold a sandbox shortcode at a
+-- time.
 CREATE TABLE IF NOT EXISTS mpesa_shortcodes (
   id                       BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   organization_id          BIGINT UNSIGNED NOT NULL,
@@ -17,6 +30,7 @@ CREATE TABLE IF NOT EXISTS mpesa_shortcodes (
   initiator_name           VARCHAR(100)    NULL,
   security_credential_enc  VARBINARY(4096) NULL,
   callback_token_hash      CHAR(64)        NULL,
+  callback_token_enc       VARBINARY(512)  NULL,
   is_active                TINYINT(1)      NOT NULL DEFAULT 1,
   created_at               DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at               DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -24,6 +38,7 @@ CREATE TABLE IF NOT EXISTS mpesa_shortcodes (
   UNIQUE KEY uq_mpesa_shortcodes_env_code (environment, shortcode),
   UNIQUE KEY uq_mpesa_shortcodes_org_id (organization_id, id),
   KEY idx_mpesa_shortcodes_org (organization_id),
+  KEY idx_mpesa_shortcodes_token (callback_token_hash),
   CONSTRAINT fk_mpesa_shortcodes_org
     FOREIGN KEY (organization_id) REFERENCES organizations (id) ON DELETE RESTRICT,
   CONSTRAINT chk_mpesa_shortcodes_type CHECK (account_type IN ('paybill','till')),
@@ -76,7 +91,8 @@ CREATE TABLE IF NOT EXISTS mpesa_transactions (
   KEY idx_mpesa_org (organization_id),
   KEY idx_mpesa_shortcode (organization_id, shortcode_id),
   KEY idx_mpesa_org_lease (organization_id, lease_id),
-  KEY idx_mpesa_org_payment (organization_id, payment_id),
+  UNIQUE KEY uq_mpesa_trans_payment (organization_id, payment_id)
+    COMMENT 'one C2B confirmation can back only one payment; a second receipt cannot reuse it',
   KEY idx_mpesa_bill_ref (bill_ref_number),
   KEY idx_mpesa_status (status),
   CONSTRAINT fk_mpesa_org
@@ -116,7 +132,8 @@ CREATE TABLE IF NOT EXISTS mpesa_stk_requests (
   KEY idx_stk_shortcode (organization_id, shortcode_id),
   KEY idx_stk_org_lease (organization_id, lease_id),
   KEY idx_stk_org_invoice (organization_id, invoice_id),
-  KEY idx_stk_org_payment (organization_id, payment_id),
+  UNIQUE KEY uq_stk_payment (organization_id, payment_id)
+    COMMENT 'one STK request can back only one payment; two prompts cannot reuse it',
   KEY idx_stk_lease (lease_id),
   KEY idx_stk_invoice (invoice_id),
   CONSTRAINT fk_stk_org

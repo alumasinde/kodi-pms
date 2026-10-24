@@ -616,10 +616,56 @@ func TestNormalizePaymentQuery(t *testing.T) {
 	if q.Status != paymentCompleted {
 		t.Fatalf("status = %q", q.Status)
 	}
+
+	// The filter speaks the column's whole vocabulary, including the two gateway
+	// statuses billing does not write yet.
+	for _, status := range []string{paymentPending, paymentCompleted, paymentFailed, paymentReversed} {
+		q := PaymentQuery{Status: status}
+		if err := normalizePaymentQuery(&q); err != nil {
+			t.Fatalf("status %q: %v", status, err)
+		}
+	}
+
 	fields := validationFields(t, normalizePaymentQuery(&PaymentQuery{
-		Status: "pending", From: day(2026, 3, 1), To: day(2026, 1, 1)}))
+		Status: "settled", From: day(2026, 3, 1), To: day(2026, 1, 1)}))
 	if fields["status"] == "" || fields["from"] == "" {
 		t.Fatalf("fields = %v", fields)
+	}
+	if !strings.Contains(fields["status"], paymentPending) {
+		t.Fatalf("fields = %v, the refusal has to name the statuses a caller may send", fields)
+	}
+}
+
+// TestPaymentDateProblem is the boundary a receipt date may not cross: money
+// cannot have arrived tomorrow, and a paid_at in 1905 is a mistyped year, not
+// history. Both would otherwise move the journal period, the aging report and
+// the oldest-first credit order along with them.
+func TestPaymentDateProblem(t *testing.T) {
+	today := day(2026, 10, 24)
+
+	if problem := paymentDateProblem(day(2026, 10, 24), today); problem != "" {
+		t.Fatalf("today = %q, the rent paid this morning is a real receipt", problem)
+	}
+	if problem := paymentDateProblem(day(2026, 10, 23), today); problem != "" {
+		t.Fatalf("yesterday = %q", problem)
+	}
+	// A timestamp from later this afternoon is still today's money.
+	afternoon := time.Date(2026, 10, 24, 15, 45, 0, 0, time.UTC)
+	if problem := paymentDateProblem(afternoon, today); problem != "" {
+		t.Fatalf("this afternoon = %q", problem)
+	}
+
+	if problem := paymentDateProblem(day(2026, 10, 25), today); !strings.Contains(problem, "future") {
+		t.Fatalf("tomorrow = %q", problem)
+	}
+	if problem := paymentDateProblem(day(2027, 4, 1), today); !strings.Contains(problem, "future") {
+		t.Fatalf("next year = %q", problem)
+	}
+	if problem := paymentDateProblem(day(1999, 12, 31), today); !strings.Contains(problem, "2000") {
+		t.Fatalf("before the books begin = %q", problem)
+	}
+	if problem := paymentDateProblem(day(1905, 6, 1), today); problem == "" {
+		t.Fatal("a mistyped year must be refused, not silently booked 120 years back")
 	}
 }
 

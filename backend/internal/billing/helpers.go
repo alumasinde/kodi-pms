@@ -172,6 +172,19 @@ func parseTimestampField(name string, value *string, fields map[string]string) (
 	return parsed, ok
 }
 
+// paymentDateProblem checks a receipt's date against the organization's own
+// calendar day. The comparison runs to the end of that day, so a timestamp from
+// later this afternoon is a real payment while one from next month is not.
+func paymentDateProblem(paidAt, today time.Time) string {
+	if !paidAt.Before(truncateDate(today).AddDate(0, 0, 1)) {
+		return "cannot be in the future"
+	}
+	if paidAt.Before(time.Date(minPaymentYear, time.January, 1, 0, 0, 0, 0, time.UTC)) {
+		return fmt.Sprintf("must be on or after 01-01-%d", minPaymentYear)
+	}
+	return ""
+}
+
 func truncateDate(value time.Time) time.Time {
 	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
 }

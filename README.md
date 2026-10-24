@@ -3,7 +3,7 @@
 Backend implementation guide for the rental / property management platform: Go + MySQL 8 + Redis, built on the schema in `db/migrations` (migrations 000001-000011).
 Each module section gives: **purpose, endpoints, who can do what, what it queries, what it returns, Redis usage, code skeleton, and automations.**
 
-> The code is a pattern to copy, not a framework lock-in. Examples use `net/http` + `chi`, `sqlx`, `go-redis/v9`, `shopspring/decimal`. Swap freely, but keep the layering and the rules in section 1.
+> The code is a pattern to copy, not a framework lock-in. Examples use `net/http` + `chi`, `sqlx`, `go-redis/v9`. Swap freely, but keep the layering and the rules in section 1.
 
 ## Contents
 1. [Foundations: layout, layers, conventions](#1-foundations)
@@ -37,7 +37,7 @@ internal/
   tenancy/                 # org resolution from Host header
   auth/  rbac/             # login, tokens, principal, permission + scope
   settings/ users/ properties/ units/ tenants/ leases/
-  billing/ payments/ utilities/ maintenance/
+  billing/ payments/ mpesa/ utilities/ maintenance/
   notifications/ dashboard/ audit/
   jobs/                    # scheduled automations
 ```
@@ -50,13 +50,18 @@ Every module has the same four files:
 | `repo.go` | SQL only; every method takes a `Scope` | decide permissions |
 | `dto.go` | request/response structs, role-aware serializers | |
 
+Two rules hold across every module in `internal/`:
+
+- **No domain module imports another.** `billing` and `utilities` import only `platform`, `rbac` and `audit`. Where one module must affect another's data, it either writes that table in its own SQL or names an interface it needs and the wiring in `internal/routes/` adapts the other module to it — `mpesa.PaymentBooker` over `billing.RecordGatewayPayment` is that seam, and `internal/routes/mpesa_gateway.go` is the only file that knows both sides.
+- **`mpesa/` also serves callbacks, which are not API endpoints.** Its `routes.go` exports `WebhookRoutes` as well as `Routes`: the three Safaricom paths are mounted on the root router, outside `/api/v1`, because a callback has no host that resolves an organization and no bearer token. Its credential is the token in its own URL, matched by keyed HMAC, and its reply is Safaricom's `ResultCode` envelope at HTTP 200 rather than the API envelope in 1.3.
+
 ### 1.2 Golden rules
 1. **Tenant isolation is never optional.** Every query on org-owned data filters `organization_id` (directly or through `properties`). A repo method without a `Scope` argument is a bug.
 2. **Permission says *what you may do*, scope says *which rows*.** `leases.view` + scope "properties 3,7" = leases of those two properties only.
 3. **Never trust the client for money, status, or org.** Recompute rent, deposits, totals, numbers server-side; ignore `organization_id` in request bodies.
 4. **Anything that touches several tables is one DB transaction.** Side effects (SMS, cache bust, audit) happen **after commit**.
-5. **Idempotent by construction.** Jobs and webhooks can fire twice; unique keys in the schema (`invoices (lease_id, invoice_type, billing_period_start)`, `mpesa_transactions.trans_id`, `payments (payment_method_id, reference)`) make the second run a no-op.
-6. **Money = `decimal.Decimal`** (JSON as string `"12500.00"`). Never `float64`.
+5. **Idempotent by construction.** Jobs and webhooks can fire twice; unique keys in the schema (`invoices (lease_id, invoice_type, billing_period_start)`, `mpesa_transactions.trans_id`, `payments (organization_id, payment_method_id, reference)`, `mpesa_transactions (organization_id, payment_id)` and `mpesa_stk_requests (organization_id, payment_id)`) make the second run a no-op.
+6. **Money is a `DECIMAL(12,2)` in MySQL and a `float64` in Go** — JSON as a number, `12500.00`. Every money column is `DECIMAL(12,2) NOT NULL`, so the database is the authority on precision; the code only ever holds it as `float64`, which is exact for integers up to 2^53 and `999999999999` cents (the column maximum, `9999999999.99`) is far below that. Because `float64` arithmetic is not associative, three rules make the representation safe: (a) every amount that leaves a calculation or enters the DB passes through `roundToCents`, which also maps NaN/Inf to 0; (b) inputs above `maxAmount = 9999999999.99` are refused with a validation error rather than truncated by the column; (c) totals are never trusted — `invoices.amount_paid`, balances and credit are derived in SQL from stored rows (see rule 10), so no chain of float additions has to agree with a stored sum. Do not introduce `shopspring/decimal`: it would change every DTO to string-encoded amounts and every comparison, without removing a real error, since the values written are already two-decimal and inside the exact range. If a future feature needs sub-cent precision (FX, pro-rata interest), change the columns and this rule together.
 7. **Time**: DB timestamps are UTC; business dates (`due_date`, `start_date`) are `DATE` in the org timezone (`Africa/Nairobi`). Jobs compute "today" using the org timezone.
 8. **Soft delete** (`deleted_at`) on users, properties, units, organizations: every read adds `deleted_at IS NULL`.
 9. **Users are unique per organization, not globally.** The same email/phone may belong to two orgs; every login/reset/invite lookup filters the resolved host org (plus `organization_id IS NULL` for platform admins). Soft-deleting a user releases the email and phone.

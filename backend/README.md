@@ -23,7 +23,12 @@
     (echo "SET @demo_seed_confirmed = 'yes';"; cat db/demo/demo_seed.sql) \
       | mysql -u user -p rental
 
-Demo login: `demo@kodipms.co.ke` / `Demo@2026!`, on the `localhost` domain.
+Demo login: `demo@kodipms.co.ke` / `Demo@2026!`, on the `localhost` domain
+(`127.0.0.1` is a second domain for the same organization). A second, fully
+separate organization is also seeded: `demo2@kodipms.co.ke`, same password, on
+`demo2.localhost` -- it has its own property, lease, invoice, paybill and
+M-Pesa queue, so per-organization isolation and shortcode-based callback routing
+are both visible in the data.
 Quick PIN for the demo admin: `2026` (password login on the device first).
 Apply it only to a dedicated demo database; it uses ids in the 9000 range, and
 the seed aborts unless `@demo_seed_confirmed` is set. The seed is written for
@@ -272,7 +277,7 @@ requesting user.
 | `POST /api/v1/late-fees/{id}/waive` | access + `invoices.update` | `reason` required; takes the fee back off the invoice and the ledger |
 | `GET /api/v1/payments` | access + `payments.view` | filters `q`, `status`, `lease_id`, `property_id`, `method_id`, `from`, `to`; `sort` accepts paid_at, amount, reference, status, method, lease, created_at |
 | `GET /api/v1/payments/{id}` | access + `payments.view` | payment with its allocations and reversal |
-| `POST /api/v1/payments` | access + `payments.create` | `lease_id`, `payment_method_id`, `amount`; `allocations` optional, else oldest-first |
+| `POST /api/v1/payments` | access + `payments.create` | `lease_id`, `payment_method_id`, `amount`; `allocations` optional, else oldest-first; `paid_at` optional and never in the future |
 | `POST /api/v1/payments/{id}/reverse` | access + `payments.reverse` | `reason` required; a reversal is always the whole payment |
 | `GET /api/v1/leases/{id}/credit` | access + `payments.view` | the credit entries a lease has, newest first |
 | `GET /api/v1/credit-notes` | access + `invoices.view` | filters `q`, `status`, `lease_id`, `invoice_id`, `property_id` |
@@ -296,6 +301,16 @@ the subtotal, the tax and the total — an `amount` in the body is rejected by t
 strict decoder. Lines are capped at 60 per invoice, `tax_rate` at 100, and every
 figure at 9999999999.99.
 
+**A utility charge enters through a line, not through the meter.** A line may carry
+`source_type: "utility_bill"` and the `source_id` of a `utility_bills` row; the bill
+then leaves utilities `pending` and becomes `billed`, pointing back at the invoice that
+holds it. Billing checks the claim, not the dial: the bill must exist in the same
+organization, sit on the invoice's own unit, and be neither paid, void, nor already
+carried by another invoice, or the line 422s. Replacing the line set re-syncs the link,
+and voiding or deleting an invoice hands its `billed` bills back to utilities to be
+raised again — a `paid` one keeps its link, because the money it collected has not gone
+anywhere.
+
 **Every movement of money is a balanced journal.** One transaction writes the
 rows and the entries: issue (AR debit against rent/utility/service income,
 deposit lines to the deposit liability), payment (cash debit against AR, with any
@@ -310,7 +325,13 @@ a draft or void invoice, or exceeds the invoice total; `trg_allocations_sync_inv
 then recomputes `amount_paid`. So the module never writes `amount_paid` and lets
 the allocation insert fail loudly (409) instead of pre-computing it. `payments`
 reference is unique per method, and a duplicate receipt 409s rather than
-double-counting. A reversal must be the full payment (`trg_payment_reversals_validate`),
+double-counting. `paid_at` is bounded by the organization's own calendar: a
+receipt dated after its today, or before 2000, 422s, because an unbounded
+`paid_at` moves the journal period, the aging report and the oldest-first credit
+order along with it. The `status` filter accepts the whole column vocabulary
+(`pending`, `completed`, `failed`, `reversed`) even though the module only ever
+books a receipt as `completed` — the gateway statuses are listed so a caller can
+filter for them before anything writes one. A reversal must be the full payment (`trg_payment_reversals_validate`),
 which is why `ReversePayment` takes no amount — a partial refund is a credit note.
 The unspent half of a reversed payment is clawed back with a negative
 `tenant_credit_entries` row of type `reversal`; tenant credit is always *derived*
@@ -359,6 +380,168 @@ Audited as `invoices.created`, `invoices.updated`, `invoices.deleted`,
 `payments.reversed`, `credit_notes.created`, `credit_notes.updated`,
 `credit_notes.issued`, `credit_notes.applied`, `credit_notes.voided` and
 `credit_notes.deleted`, each with the before/after values the request changed.
+
+### Utilities endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/utility/meters` | access + `utilities.view` | paginated; filters `q` (meter number, property, unit), `utility_type`, `status`, `property_id`, `unit_id`, `open_only`; `sort` accepts number, type, unit, property, rate, status, last_reading, created_at, updated_at |
+| `GET /api/v1/utility/meters/lookups` | access + `utilities.view` | the vocabularies plus the caller's units and meters, one request for every picker |
+| `GET /api/v1/utility/meters/{id}` | access + `utilities.view` | meter with its last 50 readings and the last 50 bills raised from it |
+| `POST /api/v1/utility/meters` | access + `utilities.create` | `property_id`, `utility_type`, `meter_number`; no `unit_id` means a shared property-level meter, `unit_of_measure` defaults per type (`m3` / `kWh` / `unit`), `rate_per_unit` is the tariff |
+| `PATCH /api/v1/utility/meters/{id}` | access + `utilities.update` | `unit_id: 0` detaches the meter to the property; changing `utility_type` 409s once the meter has been read |
+| `DELETE /api/v1/utility/meters/{id}` | access + `utilities.update` | only a meter that has never been read or billed; a meter with history 409s — set it `faulty` instead |
+| `GET /api/v1/utility/meters/{id}/readings` | access + `utilities.view` | filters `from`, `to`; `sort` accepts date, consumption, current, created_at |
+| `POST /api/v1/utility/meters/{id}/readings` | access + `utilities.record_reading` | `reading_date` + `current_reading`; `previous_reading` defaults to the last reading on the meter, a future date 422s and a second reading on the same day 409s |
+| `GET /api/v1/utility/readings/{id}` | access + `utilities.view` | reading with its meter, rate and the bill it produced; `adjustable` says whether it can still be corrected |
+| `PATCH /api/v1/utility/readings/{id}` | access + `utilities.record_reading` | `current_reading` / `notes` only — the reading date never moves; the next reading's `previous_reading` follows the correction |
+| `DELETE /api/v1/utility/readings/{id}` | access + `utilities.record_reading` | unbilled readings only; the reading after it inherits the deleted row's starting figure so the chain stays continuous |
+| `GET /api/v1/utility/bills` | access + `utilities.view` | filters `q`, `status`, `type`, `property_id`, `unit_id`, `meter_id`, `overdue`, `due_from`, `due_to`; `sort` accepts due, amount, type, status, period, unit, property, created_at, updated_at |
+| `GET /api/v1/utility/bills/{id}` | access + `utilities.view` | bill with the active lease and tenant on the unit, the invoice link and the overdue flag |
+| `POST /api/v1/utility/bills` | access + `utilities.create` | either `unit_id` + `type` + `amount` + dates, or `unit_id` + `reading_id` and the type, amount and period are taken from the dial |
+| `POST /api/v1/utility/bills/generate` | access + `utilities.create` | one bill per unbilled reading on an active, unit-attached meter; `meter_id`, `property_id`, `unit_id`, `from`, `to` narrow it; returns `{created, skipped}` |
+| `PATCH /api/v1/utility/bills/{id}` | access + `utilities.update` | pending only; anything billing has taken 409s |
+| `POST /api/v1/utility/bills/{id}/void` | access + `utilities.update` | body optional `reason`; refuses a bill already carried onto an invoice |
+| `GET /api/v1/utility/summary` | access + `utilities.view` | meters, open readings, pending bill count/total and billed total; `property_id` optional |
+
+**A meter is only ever read.** Nothing in this module creates money: `utility_meters`
+carries the tariff, `utility_readings` the quantity and `utility_bills` the charge
+that quantity implies. A bill becomes receivable only when billing attaches it to an
+invoice line, which is why `status` is not a client field — `pending` becomes `billed`
+in that hand-over and `void` only through the void call. `invoice_id` is written by
+billing, never here, and a bill that already carries one cannot be edited or voided
+from this API.
+
+**The quantity is the schema's, not the caller's.** `utility_readings.consumption` is a
+generated column (`current - previous`) and `chk_readings_order` refuses a reading that
+goes backwards, so the module defaults `previous_reading` from the meter's own history
+and caps a correction at the next reading's value instead of trusting the figure sent.
+A correction moves the reading after it as well, and is refused as soon as either side
+of it carries a bill — the quantity a charge was priced from stays fixed.
+
+**Bills follow the readings they came from.** `uq_ubills_reading` allows one bill per
+reading, so re-running `generate` is a no-op rather than a double charge. A generated
+bill is dated on the tenant's rent `due_day` in the month after the reading, priced at
+the meter's rate, and skipped (counted, not dropped silently) when the unit has no
+active lease, nothing was consumed, or no rate is set. Hand-raised bills take the same
+defaults from a `reading_id` and may still override the amount.
+
+**Deletion is where the schema is least forgiving, so it is the least allowed.** A
+meter delete cascades to its readings and orphans the bills raised from them, so a
+meter with history 409s; the seed has no `utilities.delete` permission at all, which
+is why meter deletes ride on `utilities.update` and reading deletes on
+`utilities.record_reading`. A reading delete is only accepted while neither it nor the
+reading after it has been billed.
+
+**Scope is enforced in SQL.** `utility_*` tables carry no `organization_id`: meters and
+readings reach an organization through `properties`, bills through `units` →
+`properties`, and every query also filters `deleted_at IS NULL` on those parents. A
+tenant's scope is the union of their assigned properties and the units their own tenant
+record is leased on, which leaves a shared property-level meter invisible to them —
+they see the charges on their door, not the building's dial. `404`, not `403`, for a
+row outside the scope.
+
+Audited as `utility_meters.created`, `utility_meters.updated`,
+`utility_meters.deleted`, `utility_readings.created`, `utility_readings.updated`,
+`utility_readings.deleted`, `utility_bills.created`, `utility_bills.updated`,
+`utility_bills.voided` and `utility_bills.generated`, each with the before/after values
+the request changed.
+
+### M-Pesa endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/mpesa/shortcodes` | access + `mpesa.view` | paginated; filters `q`, `environment`, `type`, `status` (`active`/`inactive`); `sort` accepts shortcode, environment, type, status, created_at, updated_at. Credentials are never returned, not even masked — the row answers with `has_consumer_key`, `has_passkey` and friends |
+| `GET /api/v1/mpesa/shortcodes/lookups` | access + `mpesa.view` | the vocabularies, the three callback paths with a `{TOKEN}` placeholder, and `gateway_configured` / `billing_connected`, which say whether this installation can prompt a phone and can book a receipt |
+| `GET /api/v1/mpesa/shortcodes/{id}` | access + `mpesa.view` | |
+| `POST /api/v1/mpesa/shortcodes` | access + `mpesa.manage` | `shortcode` (4–20 digits), `account_type`, `environment`, optional `initiator_name` and the three Daraja secrets. **The response contains the callback token once** and the three URLs to paste into the Daraja portal; nothing can read it back afterwards |
+| `PATCH /api/v1/mpesa/shortcodes/{id}` | access + `mpesa.manage` | secrets are replace-or-keep: sending any one of `consumer_key`, `consumer_secret`, `passkey` requires all three (they belong to one Daraja app), and omitting them leaves them alone. Changing `shortcode`, `environment` or `account_type` 409s once the paybill has refs, receipts or prompts attached |
+| `POST /api/v1/mpesa/shortcodes/{id}/rotate-token` | access + `mpesa.manage` | mints a new token and returns it; every URL already handed to Safaricom stops working the moment this answers, so rotate last |
+| `DELETE /api/v1/mpesa/shortcodes/{id}` | access + `mpesa.manage` | only a shortcode nothing references; anything else 409s with the counts and says to deactivate it instead |
+| `GET /api/v1/mpesa/account-refs` | access + `mpesa.view` | filters `q`, `shortcode_id`; `sort` accepts reference, shortcode, lease, created_at, updated_at |
+| `POST /api/v1/mpesa/account-refs` | access + `mpesa.manage` | `shortcode_id`, `lease_id` (in the caller's scope), `account_reference`; one reference routes one lease per paybill, so a number already in use on that shortcode 409s |
+| `DELETE /api/v1/mpesa/account-refs/{id}` | access + `mpesa.manage` | removes the routing row; receipts already recorded against it are untouched |
+| `GET /api/v1/mpesa/receipts` | access + `mpesa.view` | the C2B ledger and the reconcile queue. Filters `q` (receipt, account ref, phone, name), `status`, `shortcode_id`, `lease_id`, `from`, `to`; `sort` accepts time, amount, status, ref, msisdn, created, updated. A receipt with no lease is visible only to a caller with all-property scope |
+| `GET /api/v1/mpesa/receipts/{id}` | access + `mpesa.view` | includes the raw callback payload exactly as Safaricom sent it |
+| `POST /api/v1/mpesa/receipts/{id}/match` | access + `mpesa.reconcile` | `{lease_id}`: books the receipt through billing and links it. Refuses a receipt already matched or ignored, and refuses a lease the caller cannot see |
+| `POST /api/v1/mpesa/receipts/{id}/ignore` | access + `mpesa.reconcile` | `{reason}` required. The row stays; money that belongs to someone else is returned by whoever received it, not by this API |
+| `GET /api/v1/mpesa/stk` | access + `mpesa.view` | prompts and their outcomes; filters `q`, `status`, `lease_id`, `from`, `to`; `sort` accepts created, updated, amount, status, phone, checkout |
+| `POST /api/v1/mpesa/stk/push` | access + `mpesa.push` | `shortcode_id`, `lease_id`, optional `invoice_id`, `amount`, `phone`, `description`. No amount means the invoice's own balance; no phone means the primary tenant's. Writes nothing until Daraja accepts the request |
+| `GET /api/v1/mpesa/stk/{id}` | access + `mpesa.view` | |
+
+**Webhooks are not API endpoints.** `POST /integrations/mpesa/c2b/{token}/validate`,
+`POST /integrations/mpesa/c2b/{token}/confirm` and `POST
+/integrations/mpesa/stk/{token}/callback` are mounted on the root router, outside
+`/api/v1`, because a callback arrives with no host that resolves an organization and no
+bearer token. The token in the path is the only credential, is looked up by its keyed
+HMAC (`callback_token_hash`, indexed), and must match the shortcode named in the body —
+a valid token for paybill A cannot book money against paybill B. An unknown token and a
+deactivated shortcode get the same answer. The group takes the same per-IP rate limit as
+the API, and nothing else.
+
+Replies are always HTTP 200 with `{"ResultCode":0|1,"ResultDesc":"..."}`. A non-2xx
+reads as a delivery failure and Safaricom retries the same receipt for hours; the
+verdict belongs in `ResultCode`.
+
+**Receipts are recorded before they are spent.** `mpesa_transactions` is unique on
+`trans_id` across the whole installation, so the insert is what a retried callback bumps
+into, and it happens before any money moves. Only then does billing book the payment,
+and only then is the receipt linked to it. If the process dies in between, a payment
+exists and the receipt is still unmatched, which a person can fix; in the other order a
+retry could pay the same rent twice. A duplicate `trans_id` is re-read, and a receipt
+already owned by another organization is refused outright — that is what a shared
+sandbox paybill looks like from the inside, and it is also what a forged callback looks
+like.
+
+**A prompt and a confirmation can describe the same shilling.** A paybill with C2B
+confirmation switched on receives one for a payment that started as an STK push. The
+rule above is what makes that safe: whichever callback arrives first inserts the receipt
+and books the money, the second finds `trans_id` taken with a payment attached, and both
+point at the one payment rather than creating two. `uq_payments_org_method_reference` is
+the backstop if the process dies between booking and linking — the payment is then found
+by its reference and linked, not created again.
+
+**Money only enters through billing.** A receipt is booked over the
+`mpesa.PaymentBooker` seam, wired in `internal/routes/mpesa_gateway.go`, the only file
+that knows both modules — domain packages still do not import each other. Allocation,
+tenant credit, journal entries and the billing triggers are the same ones a cashier goes
+through, and an installation with no seam refuses to book rather than quietly dropping
+the money. Refunds are not this module's job: a reversal belongs in billing, where the
+allocation it undoes lives.
+
+**Validation stores nothing.** It answers whether the account number is one this
+organization routes to a live lease, and stops there. A tenant can still walk away from
+a validation, so a row for each one would fill the queue with payments that never
+happened. A till has no account number to check, so an empty one is accepted.
+
+**The unmatched queue is the design, not an error.** A confirmation whose account number
+is unknown, whose reference is retired, or whose lease cannot be resolved is recorded and
+left `unmatched`, and the callback is still answered as accepted — the money is real, and
+refusing it would tell the tenant their rent failed. Whoever holds `mpesa.reconcile`
+decides what it was for.
+
+**Pushing needs three things this repository cannot give you.** Consumer
+key/secret/passkey from a Daraja app, an organization that has registered a sandbox
+paybill, and `PUBLIC_BASE_URL` set to a URL Daraja can reach — a tunnel URL works in
+development, and it is baked into the outbound `CallBackURL` when the prompt is sent, so
+a shortcode created before the base URL changed needs its token rotated to get a
+callback URL that resolves. `TRUST_PROXY` has to be right too: callbacks come from
+Safaricom's addresses, not from your reverse proxy, or the IP rate limiter bans the
+network's own retries. OAuth tokens for a Daraja app are cached for 25 minutes out of
+the hour Daraja grants. Sandbox callbacks are not reliably delivered, and the sandbox is
+shared, so a number there proves nothing about an organization.
+
+**Seeded shortcodes have no credentials and no token.** `demo_seed.sql` inserts paybill
+`600000` (sandbox, org 1) and `400200` (production, org 9002) with references, receipts
+and a prompt, so the lists and the queue have data. `POST
+/api/v1/mpesa/shortcodes/{id}/rotate-token` is what gives a demo shortcode a token, and
+pushing still needs real Daraja credentials on the row.
+
+Audited as `mpesa_shortcodes.created`, `mpesa_shortcodes.updated`,
+`mpesa_shortcodes.token_rotated`, `mpesa_shortcodes.deleted`,
+`mpesa_account_refs.created`, `mpesa_account_refs.deleted`,
+`mpesa_transactions.matched`, `mpesa_transactions.unmatched`,
+`mpesa_transactions.ignored`, `mpesa_stk_requests.pushed` and
+`mpesa_stk_requests.<status>`, each with the values the request changed. Callback rows
+record the organization and no user — there is none.
 
 ## Migration order
 | #  | File                           | Tables |
@@ -415,12 +598,35 @@ Audited as `invoices.created`, `invoices.updated`, `invoices.deleted`,
   `tenant_credit_entries` and `pii_access_logs` are append-only. The billing service
   still has to *post* balanced ledger rows for each money event — the triggers enforce
   consistency, not double-entry completeness.
+- **Utility charges stay traceable to a dial.** A meter number is unique per property
+  (`uq_meters_property_number`), a reading unique per meter per day
+  (`uq_readings_meter_date`), and `uq_ubills_reading` allows exactly one bill per
+  reading — which is what makes the generate job re-runnable. `consumption` is a
+  generated column and `chk_readings_order` refuses a reading that goes backwards.
+  `utility_*` rows inherit their organization through `properties` and `units`, and the
+  meter/reading/invoice links on a bill are `SET NULL` so a charge outlives the dial
+  that produced it; only the meter→readings link cascades, which is why deleting a
+  meter with history is refused in code.
 - **Owner money is explicit.** `owner_statements` + lines, `owner_commissions` and
   `owner_disbursements` record what each owner is owed and paid; `owners.payout_*`
   columns are encrypted.
 - **M-Pesa is routed, not guessed.** `mpesa_shortcodes` holds per-org, per-environment
   credentials (encrypted) and the callback token hash; `mpesa_account_refs` maps
-  `BillRefNumber` to a lease. Transactions and STK requests carry both links.
+  `BillRefNumber` to a lease. Transactions and STK requests carry both links, and
+  `UNIQUE (organization_id, payment_id)` on each of them means one payment can be backed
+  by only one confirmation of that channel — a second receipt cannot reuse it.
+  **No Go code addresses these tables yet.** Three things are already settled by the
+  schema and the router: a Safaricom callback arrives at one fixed URL, so it must be
+  mounted outside the host-based tenancy resolver (`/api/v1` refuses any `Host` that is
+  not a registered organization domain) and take its organization from the shortcode or
+  the `CheckoutRequestID`, never from the request; `mpesa_transactions.organization_id`
+  is `NOT NULL`, so a callback whose shortcode and `BillRefNumber` both fail to resolve
+  has nowhere to be stored and must be refused with an alert rather than queued; and
+  `callback_token_hash` is the lowercase hex of `internal/platform/pii`'s keyed
+  HMAC-SHA256, looked up through `idx_mpesa_shortcodes_token`. Shortcodes stay unique
+  across organizations because a callback carries a shortcode and nothing else, which
+  also means only one organization can hold a sandbox shortcode at a time — Daraja hands
+  every test account the same paybill.
 - **PII is encrypted.** National ID, KRA PIN, tenant income and owner payout details
   live in `*_enc` VARBINARY columns sealed with AES-256-GCM by
   `internal/platform/pii`; `national_id_hash` (keyed HMAC-SHA256) allows duplicate

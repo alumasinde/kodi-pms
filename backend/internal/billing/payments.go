@@ -81,6 +81,26 @@ func (s *Service) RecordPayment(ctx context.Context, p *rbac.Principal, in Payme
 		return nil, httpx.Validation(fields)
 	}
 
+	// Only a date the client chose can be wrong: the default is this instant. The
+	// organization's own calendar decides, so its clock is read just for that.
+	if in.PaidAt != nil && strings.TrimSpace(*in.PaidAt) != "" {
+		timezone, err := s.repo.OrganizationTimezone(ctx, p.OrgID)
+		if err != nil {
+			return nil, err
+		}
+		if problem := paymentDateProblem(row.PaidAt, todayIn(orgLocation(timezone))); problem != "" {
+			return nil, httpx.Validation(map[string]string{"paid_at": problem})
+		}
+	}
+
+	return s.bookPayment(ctx, p, row, in.Allocations, meta)
+}
+
+// bookPayment writes the receipt, spends it and posts the journal. Everything
+// that judges a caller's input happens before it, so a payment channel that has
+// already proved money arrived can book through this same path and inherit the
+// same allocation plans, credit handling and database triggers as a cashier.
+func (s *Service) bookPayment(ctx context.Context, p *rbac.Principal, row *PaymentRow, allocations *[]AllocationInput, meta ClientMeta) (*PaymentDetailDTO, error) {
 	method, err := s.repo.PaymentMethod(ctx, row.PaymentMethodID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, httpx.Validation(map[string]string{"payment_method_id": "is not a known payment method"})
@@ -109,7 +129,7 @@ func (s *Service) RecordPayment(ctx context.Context, p *rbac.Principal, in Payme
 			return httpx.Conflict("A payment needs a lease that has been activated")
 		}
 
-		plans, spent, err := s.planPayment(ctx, tx, p, row, in.Allocations)
+		plans, spent, err := s.planPayment(ctx, tx, p, row, allocations)
 		if err != nil {
 			return err
 		}

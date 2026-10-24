@@ -23,6 +23,12 @@ const (
 	paymentCompleted = "completed"
 	paymentReversed  = "reversed"
 
+	// The schema's other two payment statuses. Nothing in billing writes them
+	// today — a receipt is booked when the money is in hand — but a payment
+	// gateway will need them, and a caller may already filter for them.
+	paymentPending = "pending"
+	paymentFailed  = "failed"
+
 	// leaseDraft mirrors the leases table's first status: billing needs to know
 	// it because a draft lease is not yet a tenancy money can be booked against.
 	leaseDraft = "draft"
@@ -48,6 +54,11 @@ const (
 	sourceCreditNote  = "credit_note"
 	sourceLateFee     = "late_fee"
 	itemSourceLateFee = "late_fee"
+
+	// A utility charge is measured in internal/utilities and only becomes money
+	// when a line here claims it, so this is the one source type billing has to
+	// keep in sync with another module's rows.
+	itemSourceUtilityBill = "utility_bill"
 
 	itemRent        = "rent"
 	itemWater       = "water"
@@ -90,6 +101,11 @@ const (
 	defaultRentDueDay    = 5
 	defaultVATRate       = 16.0
 
+	// The books can be backfilled, but a receipt dated before this year is a
+	// mistyped year rather than history, and the organization's own today is the
+	// latest a payment may be dated: money cannot have arrived tomorrow.
+	minPaymentYear = 2000
+
 	dateLayout = "2006-01-02"
 
 	notDraftInvoice     = "Only a draft invoice can be changed"
@@ -102,7 +118,7 @@ const (
 // an unknown column out of ORDER BY.
 var (
 	invoiceStatuses = []string{statusDraft, statusIssued, statusPartiallyPaid, statusPaid, statusOverdue, statusVoid}
-	paymentStatuses = []string{paymentCompleted, paymentReversed}
+	paymentStatuses = []string{paymentPending, paymentCompleted, paymentFailed, paymentReversed}
 	creditStatuses  = []string{creditDraft, creditIssued, creditApplied, creditVoid}
 	invoiceTypes    = []string{typeRent, typeUtility, typeService, typeMaintenance, typeAdjustment, typeOther}
 	itemTypes       = []string{

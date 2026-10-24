@@ -74,6 +74,23 @@ login. It is 4-6 digits, is blocked when `must_change_password` is set, and both
 password and PIN failures increment the same DB-backed account lock (5 failures,
 15 minutes); the Redis IP+identifier counter is a second layer, not the authority.
 
+### Settings endpoints
+| Method & path | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/settings` | access + `settings.view` | organization profile plus the effective settings (global defaults merged with this organization's overrides) |
+| `PATCH /api/v1/settings` | access + `settings.update` | partial `organization` fields and/or a `settings` map; no-op fields are ignored |
+
+`settings` returns every global key except `currency_code` (that column belongs
+to the organization profile, so update it through `organization`). Each item
+carries `value`, `value_type`, `overridden` and `default_value`, so the UI can
+show which values are customised. Setting values are type-checked and
+range-checked before writing; unknown keys are rejected. Sending `null` for a setting removes
+the organization override and reverts to the global default. In `organization`,
+omit a field to leave it unchanged and send an empty string to clear an optional
+field. The effective list is cached for 10 minutes under `settings:org:{orgID}`
+and invalidated on write; an organization profile change also invalidates the
+`domain:{host}` resolution cache.
+
 ## Migration order
 | #  | File                           | Tables |
 |----|--------------------------------|--------|

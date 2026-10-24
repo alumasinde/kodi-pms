@@ -15,18 +15,21 @@ import (
 	"kodipms/internal/platform/httpx"
 	"kodipms/internal/platform/middleware"
 	"kodipms/internal/platform/pii"
+	"kodipms/internal/rbac"
+	"kodipms/internal/settings"
 	"kodipms/internal/tenancy"
 )
 
 type Deps struct {
-	Config        *config.Config
-	Logger        *slog.Logger
-	DB            *sqlx.DB
-	Store         cache.Store
-	AuthHandler   *auth.Handler
-	Authenticator *auth.Authenticator
-	PII           *pii.Cipher
-	PIIAccess     *pii.AccessLog
+	Config          *config.Config
+	Logger          *slog.Logger
+	DB              *sqlx.DB
+	Store           cache.Store
+	AuthHandler     *auth.Handler
+	Authenticator   *auth.Authenticator
+	SettingsHandler *settings.Handler
+	PII             *pii.Cipher
+	PIIAccess       *pii.AccessLog
 }
 
 func New(deps Deps) http.Handler {
@@ -63,6 +66,13 @@ func New(deps Deps) http.Handler {
 				pr.Use(userRateLimit)
 				deps.AuthHandler.ProtectedRoutes(pr)
 			})
+		})
+
+		api.Group(func(pr chi.Router) {
+			pr.Use(deps.Authenticator.Authenticate)
+			pr.Use(userRateLimit)
+			pr.Use(rbac.RequirePasswordChanged)
+			deps.SettingsHandler.Routes(pr)
 		})
 	})
 

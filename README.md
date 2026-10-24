@@ -1,6 +1,6 @@
 # Property Management System - Code Guide (Kenya)
 
-Backend implementation guide for the rental / property management platform: Go + MySQL 8 + Redis, built on the schema in `db/migrations` (migrations 000001-000014).
+Backend implementation guide for the rental / property management platform: Go + MySQL 8 + Redis, built on the schema in `db/migrations` (migrations 000001-000011).
 Each module section gives: **purpose, endpoints, who can do what, what it queries, what it returns, Redis usage, code skeleton, and automations.**
 
 > The code is a pattern to copy, not a framework lock-in. Examples use `net/http` + `chi`, `sqlx`, `go-redis/v9`, `shopspring/decimal`. Swap freely, but keep the layering and the rules in section 1.
@@ -361,7 +361,7 @@ func Require(perm string) func(http.Handler) http.Handler {
 ```
 For single-resource routes the repo query includes the scope filter, so an out-of-scope id simply returns 404.
 
-### 4.3 Access matrix (default seed, `000013`)
+### 4.3 Access matrix (default seed, `000003`)
 `R` = read, `W` = create/update, `D` = delete/terminate/void, `own` = only their own rows, `-` = none.
 
 | Module | system/org admin | landlord | property_manager | caretaker | agent | accountant | tenant | contractor |

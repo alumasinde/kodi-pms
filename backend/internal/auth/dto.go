@@ -13,13 +13,28 @@ type LoginInput struct {
 }
 
 func (i LoginInput) Who() string {
-	if v := strings.TrimSpace(i.Identifier); v != "" {
+	return whoFrom(i.Identifier, i.Email, i.Phone)
+}
+
+type PinLoginInput struct {
+	Identifier string `json:"identifier"`
+	Email      string `json:"email"`
+	Phone      string `json:"phone"`
+	Pin        string `json:"pin"`
+}
+
+func (i PinLoginInput) Who() string {
+	return whoFrom(i.Identifier, i.Email, i.Phone)
+}
+
+func whoFrom(identifier, email, phone string) string {
+	if v := strings.TrimSpace(identifier); v != "" {
 		return v
 	}
-	if v := strings.TrimSpace(i.Email); v != "" {
+	if v := strings.TrimSpace(email); v != "" {
 		return v
 	}
-	return strings.TrimSpace(i.Phone)
+	return strings.TrimSpace(phone)
 }
 
 type RefreshInput struct {
@@ -33,13 +48,7 @@ type ForgotPasswordInput struct {
 }
 
 func (i ForgotPasswordInput) Who() string {
-	if v := strings.TrimSpace(i.Identifier); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(i.Email); v != "" {
-		return v
-	}
-	return strings.TrimSpace(i.Phone)
+	return whoFrom(i.Identifier, i.Email, i.Phone)
 }
 
 type ResetPasswordInput struct {
@@ -55,6 +64,11 @@ type AcceptInviteInput struct {
 type ChangePasswordInput struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
+}
+
+type SetPINInput struct {
+	CurrentPassword string `json:"current_password"`
+	Pin             string `json:"pin"`
 }
 
 type LogoutInput struct {
@@ -73,6 +87,7 @@ type UserDTO struct {
 	Email     string `json:"email"`
 	Phone     string `json:"phone,omitempty"`
 	Status    string `json:"status"`
+	HasPIN    bool   `json:"has_pin"`
 }
 
 type OrganizationDTO struct {

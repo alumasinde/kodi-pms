@@ -30,6 +30,7 @@ const (
 
 var (
 	errInvalidCredentials = &httpx.Err{Status: 401, Code: "invalid_credentials", Message: "Invalid email/phone or password"}
+	errInvalidPIN         = &httpx.Err{Status: 401, Code: "invalid_credentials", Message: "Invalid email/phone or PIN"}
 	errWrongPassword      = &httpx.Err{Status: 400, Code: "invalid_password", Message: "Current password is incorrect"}
 	errInvalidUserToken   = &httpx.Err{Status: 400, Code: "invalid_token", Message: "Invalid or expired token"}
 )
@@ -90,18 +91,12 @@ func (s *Service) Login(ctx context.Context, org *tenancy.Organization, in Login
 		return nil, s.failLogin(ctx, lockKey)
 	}
 
-	if u.OrganizationID.Valid {
-		if uint64(u.OrganizationID.Int64) != org.ID {
-			return nil, s.failLogin(ctx, lockKey)
-		}
-	} else {
-		admin, err := s.repo.HasGlobalRole(ctx, u.ID, "system_admin")
-		if err != nil {
-			return nil, err
-		}
-		if !admin {
-			return nil, s.failLogin(ctx, lockKey)
-		}
+	allowed, err := s.userInOrg(ctx, u, org)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, s.failLogin(ctx, lockKey)
 	}
 
 	p, err := s.loader.Load(ctx, u.ID, org.ID)
@@ -113,6 +108,61 @@ func (s *Service) Login(ctx context.Context, org *tenancy.Organization, in Login
 		return nil, err
 	}
 
+	return s.issueSession(ctx, org, u, p, meta, "login", lockKey)
+}
+
+// LoginWithPIN is the quick-login path. The PIN must have been set by an
+// authenticated user, and accounts that still owe a password change cannot
+// use it.
+func (s *Service) LoginWithPIN(ctx context.Context, org *tenancy.Organization, in PinLoginInput, meta ClientMeta) (*SessionDTO, error) {
+	who := normalizeIdentifier(strings.TrimSpace(in.Who()))
+	if org == nil || who == "" {
+		return nil, httpx.Validation(map[string]string{"identifier": "required"})
+	}
+	if err := ValidatePIN(in.Pin); err != nil {
+		return nil, err
+	}
+
+	lockKey := pinKey(meta.IP, who)
+	if s.loginLocked(ctx, lockKey) {
+		return nil, httpx.ErrTooMany
+	}
+
+	u, err := s.repo.FindUserByIdentifier(ctx, who)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	hash := dummyHash
+	if u != nil && u.PinHash.Valid && u.PinHash.String != "" {
+		hash = u.PinHash.String
+	}
+	pinOK := ComparePassword(hash, in.Pin)
+	if u == nil || !pinOK || u.Status != "active" || u.MustChangePassword {
+		return nil, s.failPIN(ctx, lockKey)
+	}
+
+	allowed, err := s.userInOrg(ctx, u, org)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, s.failPIN(ctx, lockKey)
+	}
+
+	p, err := s.loader.Load(ctx, u.ID, org.ID)
+	if err != nil {
+		var he *httpx.Err
+		if errors.As(err, &he) {
+			return nil, s.failPIN(ctx, lockKey)
+		}
+		return nil, err
+	}
+
+	return s.issueSession(ctx, org, u, p, meta, "pin_login", lockKey)
+}
+
+func (s *Service) issueSession(ctx context.Context, org *tenancy.Organization, u *UserRow, p *rbac.Principal, meta ClientMeta, action, lockKey string) (*SessionDTO, error) {
 	access, _, exp, err := s.tokens.NewAccess(u.ID, org.ID)
 	if err != nil {
 		return nil, err
@@ -137,10 +187,12 @@ func (s *Service) Login(ctx context.Context, org *tenancy.Organization, in Login
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	_ = s.store.Del(ctx, lockKey)
+	if lockKey != "" {
+		_ = s.store.Del(ctx, lockKey)
+	}
 
 	s.audit.Log(ctx, audit.Entry{
-		OrgID: org.ID, UserID: u.ID, Action: "login", EntityType: "users", EntityID: u.ID,
+		OrgID: org.ID, UserID: u.ID, Action: action, EntityType: "users", EntityID: u.ID,
 		IPAddress: meta.IP, UserAgent: meta.UserAgent,
 	})
 
@@ -265,14 +317,9 @@ func (s *Service) ForgotPassword(ctx context.Context, org *tenancy.Organization,
 	if err != nil || u.Status != "active" {
 		return
 	}
-	if u.OrganizationID.Valid && uint64(u.OrganizationID.Int64) != org.ID {
+	allowed, err := s.userInOrg(ctx, u, org)
+	if err != nil || !allowed {
 		return
-	}
-	if !u.OrganizationID.Valid {
-		admin, err := s.repo.HasGlobalRole(ctx, u.ID, "system_admin")
-		if err != nil || !admin {
-			return
-		}
 	}
 
 	raw, hash, err := NewRefreshToken()
@@ -359,6 +406,11 @@ func (s *Service) consumeUserToken(ctx context.Context, raw, purpose, passwordHa
 	if err := s.repo.UpdatePasswordTx(ctx, tx, t.UserID, passwordHash, activate); err != nil {
 		return err
 	}
+	// A reset or invite replaces the password, so the old convenience PIN must
+	// not survive it.
+	if err := s.repo.ClearPINHashTx(ctx, tx, t.UserID); err != nil {
+		return err
+	}
 	if err := s.repo.DeleteUserRefreshTokensTx(ctx, tx, t.UserID); err != nil {
 		return err
 	}
@@ -433,6 +485,42 @@ func (s *Service) ChangePassword(ctx context.Context, p *rbac.Principal, in Chan
 	return nil
 }
 
+func (s *Service) SetPIN(ctx context.Context, p *rbac.Principal, in SetPINInput, meta ClientMeta) error {
+	if p == nil {
+		return httpx.ErrUnauthorized
+	}
+	if p.MustChangePassword {
+		return httpx.ErrPasswordState
+	}
+	if in.CurrentPassword == "" {
+		return httpx.Validation(map[string]string{"current_password": "required"})
+	}
+	if err := ValidatePIN(in.Pin); err != nil {
+		return err
+	}
+
+	u, err := s.repo.FindUserByID(ctx, p.UserID)
+	if err != nil {
+		return httpx.ErrUnauthorized
+	}
+	if !ComparePassword(u.PasswordHash, in.CurrentPassword) {
+		return errWrongPassword
+	}
+	hash, err := HashPassword(in.Pin)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.UpdatePINHash(ctx, p.UserID, hash); err != nil {
+		return err
+	}
+
+	s.audit.Log(ctx, audit.Entry{
+		OrgID: p.OrgID, UserID: p.UserID, Action: "pin_set", EntityType: "users", EntityID: p.UserID,
+		IPAddress: meta.IP, UserAgent: meta.UserAgent,
+	})
+	return nil
+}
+
 func (s *Service) Me(ctx context.Context, p *rbac.Principal) (*MeDTO, error) {
 	u, err := s.repo.FindUserByID(ctx, p.UserID)
 	if err != nil {
@@ -462,17 +550,40 @@ func (s *Service) loginLocked(ctx context.Context, key string) bool {
 }
 
 func (s *Service) failLogin(ctx context.Context, key string) error {
+	return s.failAttempt(ctx, key, errInvalidCredentials)
+}
+
+func (s *Service) failPIN(ctx context.Context, key string) error {
+	return s.failAttempt(ctx, key, errInvalidPIN)
+}
+
+func (s *Service) failAttempt(ctx context.Context, key string, authErr error) error {
 	if _, err := s.store.Incr(ctx, key); err == nil {
 		_ = s.store.Expire(ctx, key, loginLockWindow)
 	}
-	return errInvalidCredentials
+	return authErr
+}
+
+func (s *Service) userInOrg(ctx context.Context, u *UserRow, org *tenancy.Organization) (bool, error) {
+	if u.OrganizationID.Valid {
+		return uint64(u.OrganizationID.Int64) == org.ID, nil
+	}
+	return s.repo.HasGlobalRole(ctx, u.ID, "system_admin")
 }
 
 func loginKey(ip, identifier string) string {
+	return throttleKey("login", ip, identifier)
+}
+
+func pinKey(ip, identifier string) string {
+	return throttleKey("pin", ip, identifier)
+}
+
+func throttleKey(kind, ip, identifier string) string {
 	if len(identifier) > 120 {
 		identifier = identifier[:120]
 	}
-	return "rl:login:" + ip + ":" + identifier
+	return "rl:" + kind + ":" + ip + ":" + identifier
 }
 
 func normalizeIdentifier(v string) string {
@@ -521,6 +632,7 @@ func buildMe(u *UserRow, p *rbac.Principal, org OrganizationDTO) *MeDTO {
 			Email:     u.Email,
 			Phone:     phone,
 			Status:    u.Status,
+			HasPIN:    u.PinHash.Valid && u.PinHash.String != "",
 		},
 		Organization: org,
 		Roles:        roles,

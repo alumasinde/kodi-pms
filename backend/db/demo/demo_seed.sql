@@ -5,6 +5,7 @@
 --
 -- Demo login:  demo@kodipms.co.ke
 -- Password:    Demo@2026!
+-- Quick PIN:   2026            (demo admin only)
 -- Domains:     localhost  and  127.0.0.1
 --
 -- The script is idempotent (every insert is INSERT IGNORE) and uses ids in the
@@ -34,7 +35,8 @@ SET @ut_2bed       = (SELECT id FROM unit_types WHERE name = '2 Bedroom' LIMIT 1
 SET @ut_1bed       = (SELECT id FROM unit_types WHERE name = '1 Bedroom' LIMIT 1);
 SET @ut_bedsitter  = (SELECT id FROM unit_types WHERE name = 'Bedsitter' LIMIT 1);
 
--- Password hash below is bcrypt cost 12 for "Demo@2026!".
+-- Password hashes below are bcrypt cost 12 for "Demo@2026!".
+-- The demo admin's pin_hash is bcrypt cost 12 for PIN "2026".
 START TRANSACTION;
 
 INSERT IGNORE INTO organizations
@@ -49,19 +51,20 @@ VALUES
   (9002, 9001, '127.0.0.1', 0, NOW());
 
 INSERT IGNORE INTO users
-  (id, organization_id, email, phone, password_hash, must_change_password, first_name, last_name, national_id, status, email_verified_at, phone_verified_at)
+  (id, organization_id, email, phone, password_hash, pin_hash, must_change_password, first_name, last_name, national_id, status, email_verified_at, phone_verified_at)
 VALUES
   (9001, 9001, 'demo@kodipms.co.ke', '+254700000001',
-   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', 0,
+   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO',
+   '$2y$12$Lj/9jGwMtyfsnvHbeA/28uUWZiziASMAdxT0ldioneqkyqzqtLvUy', 0,
    'Demo', 'Admin', '12345678', 'active', NOW(), NOW()),
   (9002, 9001, 'owner.demo@kodipms.co.ke', '+254700000002',
-   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', 0,
+   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', NULL, 0,
    'Peter', 'Mwangi', '23456789', 'inactive', NOW(), NOW()),
   (9003, 9001, 'brian.otieno@example.test', '+254700000003',
-   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', 0,
+   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', NULL, 0,
    'Brian', 'Otieno', '34567890', 'inactive', NOW(), NOW()),
   (9004, 9001, 'faith.wanjiku@example.test', '+254700000004',
-   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', 0,
+   '$2y$12$lvDZYxg40zWSK8ebMCO6yeLbsOAiqyRZWzBXzGZ/noXmfKElRESDO', NULL, 0,
    'Faith', 'Wanjiku', '45678901', 'inactive', NOW(), NOW());
 
 INSERT IGNORE INTO user_roles (user_id, role_id)

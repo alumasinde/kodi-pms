@@ -26,6 +26,7 @@ func NewHandler(svc *Service, cfg *config.Config) *Handler {
 
 func (h *Handler) PublicRoutes(r chi.Router) {
 	r.Post("/login", h.login)
+	r.Post("/pin-login", h.pinLogin)
 	r.Post("/refresh", h.refresh)
 	r.Post("/forgot-password", h.forgotPassword)
 	r.Post("/reset-password", h.resetPassword)
@@ -36,6 +37,7 @@ func (h *Handler) ProtectedRoutes(r chi.Router) {
 	r.Get("/me", h.me)
 	r.Post("/logout", h.logout)
 	r.Post("/change-password", h.changePassword)
+	r.Post("/pin", h.setPIN)
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +52,26 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session, err := h.svc.Login(r.Context(), org, in, h.meta(r))
+	if err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	h.setRefreshCookie(w, session.RefreshToken)
+	httpx.OK(w, session, nil)
+}
+
+func (h *Handler) pinLogin(w http.ResponseWriter, r *http.Request) {
+	var in PinLoginInput
+	if err := httpx.Decode(w, r, &in); err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	org, ok := tenancy.FromContext(r.Context())
+	if !ok {
+		httpx.Fail(w, tenancy.ErrUnknownDomain)
+		return
+	}
+	session, err := h.svc.LoginWithPIN(r.Context(), org, in, h.meta(r))
 	if err != nil {
 		httpx.Fail(w, err)
 		return
@@ -152,6 +174,24 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.clearRefreshCookie(w)
+	httpx.NoContent(w)
+}
+
+func (h *Handler) setPIN(w http.ResponseWriter, r *http.Request) {
+	p := rbac.FromContext(r.Context())
+	if p == nil {
+		httpx.Fail(w, httpx.ErrUnauthorized)
+		return
+	}
+	var in SetPINInput
+	if err := httpx.Decode(w, r, &in); err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	if err := h.svc.SetPIN(r.Context(), p, in, h.meta(r)); err != nil {
+		httpx.Fail(w, err)
+		return
+	}
 	httpx.NoContent(w)
 }
 

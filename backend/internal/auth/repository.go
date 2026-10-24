@@ -18,6 +18,7 @@ type UserRow struct {
 	Email              string         `db:"email"`
 	Phone              sql.NullString `db:"phone"`
 	PasswordHash       string         `db:"password_hash"`
+	PinHash            sql.NullString `db:"pin_hash"`
 	MustChangePassword bool           `db:"must_change_password"`
 	FirstName          string         `db:"first_name"`
 	LastName           string         `db:"last_name"`
@@ -53,7 +54,7 @@ type UserTokenRow struct {
 }
 
 const userColumns = `
-	id, organization_id, email, phone, password_hash, must_change_password,
+	id, organization_id, email, phone, password_hash, pin_hash, must_change_password,
 	first_name, last_name, status, last_login_at`
 
 func (r *repository) FindUserByIdentifier(ctx context.Context, identifier string) (*UserRow, error) {
@@ -209,6 +210,16 @@ func (r *repository) UpdatePasswordTx(ctx context.Context, tx *sqlx.Tx, userID u
 	_, err := tx.ExecContext(ctx, `
 		UPDATE users SET password_hash = ?, must_change_password = 0
 		WHERE id = ?`, hash, userID)
+	return err
+}
+
+func (r *repository) UpdatePINHash(ctx context.Context, userID uint64, hash string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE users SET pin_hash = ? WHERE id = ?`, hash, userID)
+	return err
+}
+
+func (r *repository) ClearPINHashTx(ctx context.Context, tx *sqlx.Tx, userID uint64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE users SET pin_hash = NULL WHERE id = ?`, userID)
 	return err
 }
 

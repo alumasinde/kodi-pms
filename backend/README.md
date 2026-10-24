@@ -21,6 +21,7 @@
     mysql -u user -p rental < db/demo/demo_seed.sql
 
 Demo login: `demo@kodipms.co.ke` / `Demo@2026!`, on the `localhost` domain.
+Quick PIN for the demo admin: `2026`.
 Apply it only to a dedicated demo database; it uses ids in the 9000 range.
 
 ## Running the API
@@ -35,17 +36,23 @@ In production a configured-but-unreachable Redis is a startup error.
 | Method & path | Auth | Notes |
 |---|---|---|
 | `POST /api/v1/auth/login` | public | identifier/email/phone + password; host must resolve to the org domain |
+| `POST /api/v1/auth/pin-login` | public | identifier/email/phone + 4-6 digit PIN; same lockout pattern as password login |
 | `POST /api/v1/auth/refresh` | refresh token | cookie or JSON body; rotates the token and detects reuse |
 | `POST /api/v1/auth/forgot-password` | public | always 200; reset link is logged in development only |
-| `POST /api/v1/auth/reset-password` | token | one-time token, invalidates all refresh tokens |
-| `POST /api/v1/auth/accept-invite` | token | one-time invite token, activates the user |
-| `GET /api/v1/auth/me` | access | user, org, roles, permissions, derived data scope |
+| `POST /api/v1/auth/reset-password` | token | one-time token, invalidates all refresh tokens and clears the PIN |
+| `POST /api/v1/auth/accept-invite` | token | one-time invite token, activates the user and clears any PIN |
+| `GET /api/v1/auth/me` | access | user, org, roles, permissions, derived data scope, `has_pin` |
 | `POST /api/v1/auth/logout` | access | revokes the refresh family and deny-lists the access token |
 | `POST /api/v1/auth/change-password` | access | revokes other refresh tokens |
+| `POST /api/v1/auth/pin` | access | set or replace the quick PIN; requires `current_password` |
 
 Access tokens are 15-minute JWTs sent as `Authorization: Bearer`. Refresh tokens
 are 30-day rotating tokens stored only as SHA-256 hashes; the web app receives an
 HttpOnly cookie, mobile clients get the value in the JSON body.
+
+A PIN is optional, hashed with bcrypt alongside the password, and is only for
+quick sign-in: it is 4-6 digits, is blocked when `must_change_password` is set,
+and uses a separate 5-failures/15-minutes throttle keyed by IP and identifier.
 
 ## Migration order
 | #  | File                           | Tables |

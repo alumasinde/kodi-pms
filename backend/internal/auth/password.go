@@ -53,3 +53,20 @@ func ValidatePassword(password string) error {
 	}
 	return nil
 }
+
+const pinRule = "must be 4 to 6 digits"
+
+func ValidatePIN(pin string) error {
+	if pin == "" {
+		return httpx.Validation(map[string]string{"pin": "required"})
+	}
+	if len(pin) < 4 || len(pin) > 6 {
+		return httpx.Validation(map[string]string{"pin": pinRule})
+	}
+	for i := 0; i < len(pin); i++ {
+		if pin[i] < '0' || pin[i] > '9' {
+			return httpx.Validation(map[string]string{"pin": pinRule})
+		}
+	}
+	return nil
+}

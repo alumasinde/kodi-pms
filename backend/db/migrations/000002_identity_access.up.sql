@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
   email                VARCHAR(255) NOT NULL,
   phone                VARCHAR(20)  NULL COMMENT 'E.164, e.g. +254712345678',
   password_hash        VARCHAR(255) NOT NULL,
-  pin_hash             VARCHAR(255) NULL COMMENT 'Optional 4-digit PIN for quick login',
+  pin_hash             VARCHAR(255) NULL COMMENT 'Optional 4-6 digit PIN for quick login',
   must_change_password TINYINT(1)   NOT NULL DEFAULT 0,
   first_name           VARCHAR(100) NOT NULL,
   last_name            VARCHAR(100) NOT NULL,
